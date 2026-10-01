@@ -36,7 +36,7 @@ Return a JSON object with these exact fields:
     "estimated_size": "Startup / SMB / Mid-Market / Enterprise / Large Corporation",
     "geographic_presence": "Local / National / International",
     "common_pain_points": ["3-4 growth challenges this type of company typically faces that SEO / digital marketing can solve"],
-    "growth_opportunities": ["2-3 specific areas where SERP Hawk's SEO and digital services could help them grow"],
+    "growth_opportunities": ["2-3 specific areas where DaPros's web design, marketing, and SEO services could help them grow"],
     "contacts": [
         {{
             "name": "If you know a real contact name (e.g. key executive), otherwise null",

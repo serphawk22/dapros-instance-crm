@@ -10,14 +10,14 @@ from email.mime.base import MIMEBase
 from email import encoders
 from email.utils import formatdate, make_msgid
 
-# ── SerpHawk logo (used in every HTML email) ────────────────────────────────
+# ── DaPros logo (used in every HTML email) ──────────────────────────────────
 _logo_lock = threading.Lock()
 _logo_bytes_cache = None
-_LOGO_FILENAME = "Serp Hwak Logo.png"
+_LOGO_FILENAME = "dapros_logo.png"
 
 
 def _serphawk_logo_bytes():
-    """Load + resize the SerpHawk logo from the project folder, cached, as PNG bytes."""
+    """Load + resize the DaPros logo from the project folder, cached, as PNG bytes."""
     global _logo_bytes_cache
     if _logo_bytes_cache is not None:
         return _logo_bytes_cache
@@ -25,46 +25,51 @@ def _serphawk_logo_bytes():
         if _logo_bytes_cache is not None:
             return _logo_bytes_cache
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        path = os.path.join(project_root, _LOGO_FILENAME)
-        try:
-            from PIL import Image, ImageChops
-            with Image.open(path) as im:
-                im = im.convert("RGB")
-                bg = Image.new("RGB", im.size, (252, 252, 252))
-                bbox = ImageChops.difference(im, bg).getbbox()
-                if bbox:
-                    im = im.crop(bbox)
-                w, h = im.size
-                target = 170
-                scale = min(1.0, target / max(w, h))
-                if scale < 1.0:
-                    im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
-                buf = io.BytesIO()
-                im.save(buf, format="PNG", optimize=True)
-                _logo_bytes_cache = buf.getvalue()
-        except Exception as e:
-            print(f"[SerpHawk logo load failed] {e}")
-            _logo_bytes_cache = None
+        # Try dapros_logo.png first, fall back to old file
+        for fname in ("dapros_logo.png", _LOGO_FILENAME, "Serp Hwak Logo.png"):
+            path = os.path.join(project_root, fname)
+            if not os.path.exists(path):
+                continue
+            try:
+                from PIL import Image, ImageChops
+                with Image.open(path) as im:
+                    im = im.convert("RGBA")
+                    bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+                    bg.paste(im, mask=im.split()[3])
+                    im = bg.convert("RGB")
+                    w, h = im.size
+                    target = 200
+                    scale = min(1.0, target / max(w, h))
+                    if scale < 1.0:
+                        im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    im.save(buf, format="PNG", optimize=True)
+                    _logo_bytes_cache = buf.getvalue()
+                break
+            except Exception as e:
+                print(f"[DaPros logo load failed from {fname}] {e}")
+                continue
     return _logo_bytes_cache
 
 
-def _logo_img_html(alt="SERP Hawk"):
+def _logo_img_html(alt="DaPros"):
     return (
-        f'<img src="cid:serphawk_logo" alt="{alt}" width="150" height="150" '
-        'style="display:block;width:150px;height:150px;border-radius:12px;background:#ffffff;padding:4px;box-sizing:border-box" />'
+        f'<img src="cid:serphawk_logo" alt="{alt}" '
+        'style="display:block;max-width:180px;height:auto;" />'
     )
 
 
 def _inject_logo(html):
-    """Insert the SerpHawk logo into an HTML email body."""
+    """Insert the DaPros logo into an HTML email body."""
     if "cid:serphawk_logo" in html:
         return html
     img = _logo_img_html()
     replacements = [
         ('<strong style="font-size:18px">🦅 SERP Hawk CRM</strong>', img),
-        ('<strong style="font-size:18px">🦅 SERP Hawk Supplier Portal</strong>', _logo_img_html("SERP Hawk Supplier Portal")),
+        ('<strong style="font-size:18px">🦅 SERP Hawk Supplier Portal</strong>', _logo_img_html("DaPros")),
         ('<strong style="font-size:18px">SerpHawk CRM</strong>', img),
         ('<p style="margin:0;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#93c5fd">SerpHawk CRM</p>', img),
+        ('<p style="margin:0;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#93c5fd">DaPros</p>', img),
     ]
     for old, new in replacements:
         if old in html:
@@ -205,8 +210,8 @@ def send_email_outlook(
 
 
 # ── Branded email shell ───────────────────────────────────────────────────
-# Wrap any content in the SerpHawk visual identity: logo header, clean body,
-# and a footer. `send_email_outlook` auto-embeds the SerpHawk logo whenever
+# Wrap any content in the DaPros visual identity: logo header, clean body,
+# and a footer. `send_email_outlook` auto-embeds the DaPros logo whenever
 # the HTML references cid:serphawk_logo (see _inject_logo), so the header
 # below always resolves to the real logo image.
 
@@ -214,19 +219,19 @@ def _escape_html(value):
     return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def branded_email(title, body_html, hero_accent="#2563eb"):
-    """Return a complete, responsive HTML email with the SerpHawk header,
+def branded_email(title, body_html, hero_accent="#7c3aed"):
+    """Return a complete, responsive HTML email with the DaPros header,
     the given title and body, and a standard footer."""
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:#eef1f7;font-family:Arial,Helvetica,sans-serif;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef1f7;padding:24px 0;">
+<body style="margin:0;padding:0;background:#f0f0f5;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f0f0f5;padding:24px 0;">
     <tr><td align="center">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e6e9f0;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e2e0ea;">
         <!-- Header -->
         <tr>
-          <td style="background:linear-gradient(135deg,#16233b,{hero_accent});padding:22px 28px;text-align:center;">
+          <td style="background:#ffffff;padding:22px 28px;text-align:center;border-bottom:2px solid {hero_accent};">
             {_logo_img_html()}
           </td>
         </tr>
@@ -244,10 +249,11 @@ def branded_email(title, body_html, hero_accent="#2563eb"):
         </tr>
         <!-- Footer -->
         <tr>
-          <td style="background:#f8fafc;padding:18px 32px;border-top:1px solid #e6e9f0;text-align:center;">
-            <p style="margin:0;color:#7b8794;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">SerpHawk CRM</p>
-            <p style="margin:6px 0 0;color:#94a3b8;font-size:11px;line-height:1.6;">This is an automated email from SerpHawk CRM. If you have questions, reply to this message or contact your account manager.</p>
-            <p style="margin:8px 0 0;color:#94a3b8;font-size:10px;line-height:1.5;">If this email looks unusual, you can safely ignore it. Check your spam folder if a message you expected is missing.</p>
+          <td style="background:#f8f7ff;padding:18px 32px;border-top:1px solid #e2e0ea;text-align:center;">
+            <p style="margin:0;color:#7c3aed;font-size:13px;font-weight:700;letter-spacing:1px;">DaPros</p>
+            <p style="margin:4px 0 0;color:#64748b;font-size:11px;">Av. Chapultepec Sur 15, Guadalajara, Jal. | dapros.com.mx</p>
+            <p style="margin:6px 0 0;color:#94a3b8;font-size:11px;line-height:1.6;">Graphic Design &bull; Marketing &bull; Websites</p>
+            <p style="margin:8px 0 0;color:#94a3b8;font-size:10px;line-height:1.5;">This is an automated message from DaPros. If you have questions, reply to this email or contact us at contacto@dapros.com.mx</p>
           </td>
         </tr>
       </table>
@@ -296,7 +302,7 @@ def send_password_reset_email(to_email: str, reset_url: str):
     smtp_port = __import__("os").environ.get("EMAIL_PORT") or __import__("os").environ.get("SMTP_PORT", 587)
     if not sender or not password:
         return False
-    subject = "Reset your SERP Hawk CRM password"
+    subject = "Reset your DaPros CRM password"
     html = branded_email(
         title="Reset your password",
         body_html=(
@@ -330,7 +336,7 @@ def send_otp_email(to_email: str, otp_code: str, purpose: str = "email verificat
     smtp_port = os.environ.get("EMAIL_PORT") or os.environ.get("SMTP_PORT", 587)
     if not sender or not password:
         return False
-    subject = f"Your SERP Hawk CRM verification code: {otp_code}"
+    subject = f"Your DaPros CRM verification code: {otp_code}"
     html = branded_email(
         title="Verify your email address",
         body_html=(

@@ -214,7 +214,7 @@ export default function EmailAgentPage() {
         body: JSON.stringify({
           company_name: name,
           company_url: cleanUrl || null,
-          owner_name: "Noushad C I",
+          owner_name: "Emmanuel Padilla",
         }),
       });
       
@@ -442,20 +442,68 @@ export default function EmailAgentPage() {
           {/* PageGuide components uses white text on dark variants, but we will leave it as is if it handles its own styles, though it floats */}
         </div>
 
-        <section className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-5 dark:border-emerald-900/60 dark:bg-emerald-950/20">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div><p className="text-[10px] font-black uppercase tracking-widest text-emerald-700 dark:text-emerald-300">Outreach profile</p><h2 className="text-lg font-black text-slate-900 dark:text-white">SCM BPO</h2></div>
-            <span className="rounded-full bg-white px-3 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-700 shadow-sm dark:bg-zinc-900 dark:text-emerald-300">Logistics BPO</span>
+        <section className="mb-6 rounded-2xl border border-emerald-500/25 bg-[#03120c]/90 dark:bg-[#03120c]/90 p-6 shadow-xl backdrop-blur-md">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-4 border-b border-emerald-500/15 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 px-3 py-1 bg-white rounded-xl flex items-center justify-center shadow-sm border border-emerald-500/20">
+                <img src="/dapros_logo.png" alt="DaPros" className="h-7 w-auto object-contain" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">OUTREACH PROFILE</p>
+                <h2 className="text-xl font-black text-white tracking-tight">DaPros</h2>
+              </div>
+            </div>
+            <span className="rounded-full bg-emerald-950/80 px-3.5 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-400 shadow-sm border border-emerald-500/30">
+              MARKETING &amp; DESIGN
+            </span>
           </div>
-          <div className="grid grid-cols-1 gap-x-8 gap-y-3 text-xs text-slate-600 dark:text-zinc-300 sm:grid-cols-2 lg:grid-cols-3">
-            <p><strong className="block text-[10px] uppercase tracking-widest text-slate-400">Legal company</strong>SCM SHIPPING SERVICES PVT LTD</p>
-            <p><strong className="block text-[10px] uppercase tracking-widest text-slate-400">Industry</strong>Outsourcing</p>
-            <p><strong className="block text-[10px] uppercase tracking-widest text-slate-400">Website</strong>www.scmbpo.com</p>
-            <p><strong className="block text-[10px] uppercase tracking-widest text-slate-400">Primary contact</strong>Noushad C I, Founder</p>
-            <p><strong className="block text-[10px] uppercase tracking-widest text-slate-400">Contact</strong>+91-9947950099</p>
-            <p><strong className="block text-[10px] uppercase tracking-widest text-slate-400">Email</strong>contact@scmbpo.com</p>
-            <p className="sm:col-span-2 lg:col-span-3"><strong className="block text-[10px] uppercase tracking-widest text-slate-400">Address</strong>Koyenco Techpark, Kepip, Infopark P.O., Kakkanad, Cochin</p>
-            <p className="sm:col-span-2 lg:col-span-3"><strong className="block text-[10px] uppercase tracking-widest text-slate-400">Services</strong>Logistics back-office support services (BPO)</p>
+
+          <div className="grid grid-cols-1 gap-x-8 gap-y-4 text-xs sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <span className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">LEGAL COMPANY</span>
+              <p className="text-sm font-semibold text-slate-100">Dapros mkt</p>
+            </div>
+            <div>
+              <span className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">INDUSTRY</span>
+              <p className="text-sm font-semibold text-slate-100">marketing</p>
+            </div>
+            <div>
+              <span className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">WEBSITE</span>
+              <a href="https://dapros.com.mx" target="_blank" rel="noreferrer" className="text-sm font-semibold text-emerald-400 hover:text-emerald-300 transition-colors">
+                dapros.com.mx
+              </a>
+            </div>
+
+            <div>
+              <span className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">PRIMARY CONTACT</span>
+              <p className="text-sm font-semibold text-slate-100">Emmanuel Padilla, FOUNDER</p>
+            </div>
+            <div>
+              <span className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">CONTACT</span>
+              <a href="tel:+523331849546" className="text-sm font-semibold text-slate-100 hover:text-emerald-400 transition-colors">
+                +52 33 3184 9546
+              </a>
+            </div>
+            <div>
+              <span className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">EMAIL</span>
+              <a href="mailto:contacto@dapros.com.mx" className="text-sm font-semibold text-slate-100 hover:text-emerald-400 transition-colors">
+                contacto@dapros.com.mx
+              </a>
+            </div>
+
+            <div className="sm:col-span-2 lg:col-span-3">
+              <span className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">ADDRESS</span>
+              <p className="text-sm font-semibold text-slate-200">
+                Av. Chapultepec Sur 15, Ladrón de Guevara, Americana, 44600 Guadalajara, Jal.
+              </p>
+            </div>
+
+            <div className="sm:col-span-2 lg:col-span-3">
+              <span className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">SERVICES</span>
+              <p className="text-sm font-semibold text-slate-200">
+                Graphic design, marketing, websites
+              </p>
+            </div>
           </div>
         </section>
 

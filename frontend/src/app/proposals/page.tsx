@@ -519,6 +519,43 @@ export default function ProposalsPage() {
             </div>
 
             <div className="p-6 space-y-5">
+              {/* DaPros Issuer Card */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50/50 dark:from-emerald-950/20 dark:to-teal-950/10 border border-emerald-200/80 dark:border-emerald-800/40">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <img src="/dapros_logo.png" alt="DaPros" className="h-10 w-auto object-contain rounded-lg shadow-sm bg-white p-1" />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-extrabold text-slate-900 dark:text-zinc-100 text-sm">DaPros</span>
+                        <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-100/80 dark:bg-emerald-900/40 px-2 py-0.5 rounded-full">Dapros mkt</span>
+                      </div>
+                      <p className="text-xs text-slate-600 dark:text-zinc-300 font-medium mt-0.5">Diseño Web · Marketing · Soluciones Digitales</p>
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-white/80 dark:bg-zinc-800/80 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800/50 shadow-sm shrink-0">
+                    dapros.com.mx
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 pt-3 border-t border-emerald-200/60 dark:border-emerald-800/30 text-xs text-slate-600 dark:text-zinc-400">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-semibold text-slate-700 dark:text-zinc-300">Contacto:</span>
+                    <span>Emmanuel Padilla, Founder</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-semibold text-slate-700 dark:text-zinc-300">Tel:</span>
+                    <a href="tel:+523331849546" className="text-emerald-600 dark:text-emerald-400 hover:underline">+52 33 3184 9546</a>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-semibold text-slate-700 dark:text-zinc-300">Email:</span>
+                    <a href="mailto:contacto@dapros.com.mx" className="text-emerald-600 dark:text-emerald-400 hover:underline">contacto@dapros.com.mx</a>
+                  </div>
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span className="font-semibold text-slate-700 dark:text-zinc-300">Ubicación:</span>
+                    <span className="truncate" title="Av. Chapultepec Sur 15, Americana, 44600 Guadalajara, Jal.">Av. Chapultepec Sur 15, Guadalajara</span>
+                  </div>
+                </div>
+              </div>
+
               {/* Status */}
               <div>
                 <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-2">{t("proposals.update_status")}</p>

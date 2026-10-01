@@ -32,7 +32,7 @@ export default function QuotesPage() {
   const [pendingSend, setPendingSend] = useState<{ quote: Quote; trigger?: "list" } | null>(null);
   const [sendingEmail, setSendingEmail] = useState(false);
   const [form, setForm] = useState({
-    title: "", status: "Draft", currency: "USD",
+    title: "", status: "Draft", currency: "MXN",
     valid_until: "", notes: "",
     linked_to: "lead" as "lead" | "client",
     lead_id: "" as string | number,
@@ -251,6 +251,13 @@ export default function QuotesPage() {
                 <button onClick={() => setPendingSend(null)} className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-zinc-800"><X className="w-4 h-4" /></button>
               </div>
               <div className="p-6">
+                <div className="mb-4 flex items-center gap-3 p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200/70 dark:border-emerald-800/40">
+                  <img src="/dapros_logo.png" alt="DaPros" className="h-7 w-auto object-contain rounded bg-white p-0.5" />
+                  <div className="text-xs">
+                    <p className="font-bold text-slate-800 dark:text-zinc-100">DaPros (Dapros mkt)</p>
+                    <p className="text-[11px] text-slate-500">contacto@dapros.com.mx · Av. Chapultepec Sur 15, Guadalajara</p>
+                  </div>
+                </div>
                 <p className="text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
                   {t("quotes.send_email_desc") || "Mark this quote as Sent and email the details to the linked lead/client?"}
                 </p>

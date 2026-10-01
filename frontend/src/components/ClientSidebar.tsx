@@ -81,7 +81,7 @@ export function ClientSidebar() {
                 className="flex flex-col overflow-hidden flex-1"
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-black text-base leading-tight tracking-tight" style={{ color: "var(--text-primary)" }}>SERP Hawk</span>
+                  <span className="font-black text-base leading-tight tracking-tight" style={{ color: "var(--text-primary)" }}>DaPros</span>
                   <button
                     onClick={toggleTheme}
                     className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"

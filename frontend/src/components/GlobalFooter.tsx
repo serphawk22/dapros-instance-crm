@@ -17,7 +17,7 @@ export default function GlobalFooter() {
 
         {/* Center: Copyright */}
         <span className="shrink-0">
-          A SERPHawk&apos;s Product &copy; {new Date().getFullYear()}
+          DaPros CRM &copy; {new Date().getFullYear()}
         </span>
 
         {/* Right: Contact links */}

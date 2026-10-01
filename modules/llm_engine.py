@@ -44,7 +44,7 @@ Cover absolutely everything in extreme detail:
 7. Sales & GTM Strategy: What channels should they use? What are the quick wins?
 8. Common Objections & Rebuttals (What will prospects say to say no, and how to counter it)
 9. Cold Email Angles (Provide 3 distinct cold email angles/hooks for outreach)
-10. SEO & Digital Presence analysis (What is missing? SERP Hawk opportunities)
+10. SEO, Graphic Design & Digital Presence analysis (What is missing? DaPros growth opportunities)
 
 Return ONLY valid JSON with this exact structure:
 {{
@@ -77,9 +77,15 @@ Return ONLY valid JSON with this exact structure:
     }},
     "serphawk_opportunity": {{
         "fit_score": 8,
-        "pitch_angle": "How to sell to them",
+        "pitch_angle": "How DaPros can accelerate their growth with web design, marketing, and SEO",
         "estimated_deal_value": "$5k - $10k",
-        "recommended_services": ["SEO", "Web Dev"]
+        "recommended_services": ["Web Design", "Marketing", "Graphic Design"]
+    }},
+    "dapros_opportunity": {{
+        "fit_score": 8,
+        "pitch_angle": "How DaPros can accelerate their growth with web design, marketing, and SEO",
+        "estimated_deal_value": "$5k - $10k",
+        "recommended_services": ["Web Design", "Marketing", "Graphic Design"]
     }},
     "contacts": [
         {{
@@ -221,37 +227,107 @@ def analyze_content(text):
         }
 
 
-def generate_email(analysis, contact=None, recommended_services=None, owner_name="Varshith"):
+def generate_dapros_fallback_draft(company_name: str, what_they_do: str = "", services_list_str: str = "", contact: dict = None, owner_name: str = "Emmanuel Padilla") -> dict:
     """
-    Generates a personalized bilingual cold email using OpenAI.
-    Returns english_body (para 1) and spanish_body (para 2) separately.
+    Generates a personalized, high-converting cold email draft based on DaPros business details.
+    Used when OpenAI is unavailable or encountered an error.
     """
+    c_name = (company_name or "your company").strip()
+    contact_name = (contact.get("name") if contact and isinstance(contact, dict) else "") or ""
+    salutation_en = f"Hi {contact_name}," if contact_name else "Hello,"
+    salutation_es = f"Hola {contact_name}," if contact_name else "Hola,"
+    
+    services_en = "custom web design, digital marketing, and strategic graphic design"
+    services_es = "diseño web moderno, marketing digital y diseño gráfico estratégico"
+    
+    subject = f"Growth & Digital Strategy for {c_name}"
+    
+    english_body = f"""{salutation_en}
+
+I was reviewing {c_name} and was really impressed by your market presence. As a digital agency helping ambitious companies accelerate their growth, I noticed a few high-impact opportunities to elevate your online conversions and brand visibility.
+
+At DaPros (based in Guadalajara), we specialize in {services_en} for growing startups, SMEs, and established enterprises. We help brands like yours:
+• Modernize website UI/UX to significantly improve visitor-to-client conversion rates.
+• Generate targeted, high-intent inbound demand through search and digital marketing.
+• Strengthen visual identity and brand positioning across all digital touchpoints.
+
+Would you be open to a brief 10-minute strategy call next week to explore practical ideas tailored for {c_name}?
+
+Best regards,
+
+{owner_name}
+Founder, DaPros
+contacto@dapros.com.mx | +52 33 3184 9546
+https://dapros.com.mx
+Av. Chapultepec Sur 15, Americana, 44600 Guadalajara, Jal."""
+
+    spanish_body = f"""{salutation_es}
+
+Estuve revisando la presencia digital de {c_name} y me pareció muy destacable la labor que realizan en su sector. Como agencia especializada en potenciar la presencia y captación de clientes de empresas en crecimiento, detecté oportunidades clave para optimizar su impacto comercial.
+
+En DaPros (agencia digital en Guadalajara), nos especializamos en {services_es} para empresas, startups y PyMEs. Ayudamos a impulsar resultados medibles a través de:
+• Sitios web modernos y optimizados para convertir visitantes en clientes potenciales.
+• Campañas de marketing digital y posicionamiento SEO orientadas a demanda calificada.
+• Identidad visual y branding corporativo que generan confianza y diferenciación inmediata.
+
+¿Tendrías 10 minutos esta semana para una breve llamada y revisar un par de recomendaciones prácticas para {c_name}?
+
+Saludos cordiales,
+
+{owner_name}
+Fundador, DaPros
+contacto@dapros.com.mx | +52 33 3184 9546
+https://dapros.com.mx
+Av. Chapultepec Sur 15, Americana, 44600 Guadalajara, Jal."""
+
+    whatsapp_draft = f"Hola {contact_name + ' ' if contact_name else ''}👋 Te saluda Emmanuel Padilla de DaPros en Guadalajara. Estuve viendo el proyecto de {c_name} y me gustaría compartirte 2 o 3 sugerencias rápidas de diseño web y captación de clientes que les pueden sumar mucho valor. ¿Tendrías 5 minutos para una breve llamada? ¡Un saludo!"
+
+    return {
+        "subject": subject,
+        "english_body": english_body,
+        "spanish_body": spanish_body,
+        "whatsapp_draft": whatsapp_draft,
+        "body": f"{english_body}\n\n---\n\n{spanish_body}"
+    }
+
+
+def generate_email(analysis, contact=None, recommended_services=None, owner_name="Emmanuel Padilla"):
+    """
+    Generates a personalized bilingual cold email using OpenAI with DaPros branding.
+    Gracefully falls back to handcrafted DaPros draft if OpenAI is unreachable.
+    """
+    company_name = analysis.get('company_name', '') if isinstance(analysis, dict) else ''
+    what_they_do = (analysis.get('what_they_do') or analysis.get('summary', '')) if isinstance(analysis, dict) else ''
+    services = analysis.get('key_value_props', []) if isinstance(analysis, dict) else []
+    website = analysis.get('website', '') if isinstance(analysis, dict) else ''
+
+    services_to_mention = []
+    if recommended_services and isinstance(recommended_services, list):
+        for svc in recommended_services:
+            if isinstance(svc, dict):
+                services_to_mention.append(svc.get('service_name', ''))
+            elif isinstance(svc, str):
+                services_to_mention.append(svc)
+    if not services_to_mention:
+        services_to_mention = services
+
+    services_list_str = ', '.join(services_to_mention) if services_to_mention else 'Diseño web, marketing digital, y diseño gráfico'
+
     try:
         client = get_openai_client()
-        recipient_info = f"Recipient: {contact.get('name')} ({contact.get('role')})" if contact else "General Inbox"
-
-        company_name = analysis.get('company_name', '')
-        what_they_do = analysis.get('what_they_do', analysis.get('summary', ''))
-        services = analysis.get('key_value_props', [])
-        website = ''
-        if 'website' in analysis:
-            website = analysis['website']
-
-        # Use recommended_services if provided (from smart-research flow)
-        services_to_mention = []
-        if recommended_services and isinstance(recommended_services, list):
-            for svc in recommended_services:
-                if isinstance(svc, dict):
-                    services_to_mention.append(svc.get('service_name', ''))
-                elif isinstance(svc, str):
-                    services_to_mention.append(svc)
-        if not services_to_mention:
-            services_to_mention = services
-
-        services_list_str = ', '.join(services_to_mention) if services_to_mention else 'SEO, digital marketing, and automation'
+        recipient_info = f"Recipient: {contact.get('name')} ({contact.get('role')})" if (contact and isinstance(contact, dict) and contact.get('name')) else "General Inbox"
 
         prompt = f"""
-        You are an expert B2B outreach copywriter writing on behalf of Team DaPros (SERP Hawk Digital Agency). Use ONLY the provided company info below. Do not invent details.
+        You are an expert B2B outreach copywriter writing on behalf of DaPros (a graphic design, marketing & web agency based in Guadalajara, Mexico). Use ONLY the provided company info below. Do not invent details.
+
+        ABOUT DAPROS:
+        Company: DaPros | Legal: Dapros mkt
+        Industry: Graphic Design, Marketing, Websites
+        Website: dapros.com.mx
+        Address: Av. Chapultepec Sur 15, Ladrón de Guevara, Americana, 44600 Guadalajara, Jal.
+        Contact: Emmanuel Padilla — Founder
+        Phone: +52 33 3184 9546
+        Email: contacto@dapros.com.mx | padilla@dapros.com.mx
 
         PROSPECT INFO:
         Company: {company_name}
@@ -262,31 +338,28 @@ def generate_email(analysis, contact=None, recommended_services=None, owner_name
         SERVICES TO HIGHLIGHT: {services_list_str}
 
         OUR FULL SERVICE CATALOG (for context):
-        • Organic SEO — higher Google rankings, more organic traffic
-        • Local SEO — dominate Google Maps & local search
-        • Google Ads — targeted PPC with measurable ROI
-        • Meta Ads — Facebook & Instagram campaigns that convert
-        • Social Media — brand presence & audience engagement
-        • Content Marketing — SEO blogs, landing pages, conversion copy
-        • Web Development — fast, modern, conversion-optimized sites
-        • App Development — custom mobile & web applications
-        • Automation & Consulting — smart workflows & strategy
+        • Diseño Gráfico / Graphic Design — identidad visual, branding, materiales impresos y digitales
+        • Marketing Digital — estrategia de contenidos, redes sociales, email marketing, Google & Meta Ads
+        • Diseño Web / Websites — sitios rápidos, modernos y optimizados para conversión
+        • Identidad de Marca / Branding — logotipos, guías de estilo, presentaciones corporativas
+        • SEO & Visibilidad Online — posicionamiento orgánico y local en buscadores
+        • Fotografía & Contenido Visual — para redes sociales y e-commerce
 
-        EMAIL STRUCTURE (English):
-        1. Hook (1-2 sentences) — A specific observation about {company_name}'s online presence or an opportunity you spotted. Make it personal.
-        2. Problem/Opportunity (2-3 sentences) — A concrete challenge they likely face based on their industry and what they do.
-        3. Service Spotlight (3-5 sentences) — For EACH service in [{services_list_str}], write one clear sentence: what it does + the measurable result for them. Use concrete outcomes like "rank on page 1", "2x local visibility", "cut ad spend waste by 30%".
-        4. Social proof (1 sentence) — Mention working with similar businesses to build trust.
-        5. CTA (1 sentence) — Invite them to a free 15-minute strategy call. Make it effortless.
-        6. Sign-off: "Best regards,\n{owner_name} | SERP Hawk Digital Agency"
+        EMAIL STRUCTURE (English then Spanish):
+        English:
+        1. Hook (1-2 sentences) — A specific, personalized observation about {company_name}'s online presence or a visible opportunity. Never generic.
+        2. Problem/Opportunity (2-3 sentences) — A concrete challenge they face in their industry.
+        3. Service Spotlight (3-5 sentences) — For EACH service in [{services_list_str}], one clear sentence: what it does + measurable outcome for them.
+        4. Social proof (1 sentence) — Mention working with similar businesses (startups, SMEs, restaurants, hotels, logistics companies).
+        5. CTA (1 sentence) — Invite a free 15-minute strategy call. Make it easy.
+        6. Sign-off: "Atentamente,\\n{owner_name}\\nFundador, DaPros\\ncontacto@dapros.com.mx | +52 33 3184 9546"
 
-        STYLE: 120-180 words total. Short paragraphs (2-3 sentences each), separated by blank lines. Conversational, confident, zero fluff. Services are the STAR — the reader should finish knowing exactly what you offer and why it matters for them.
+        STYLE: 120-180 words total (English). Short paragraphs. Conversational, confident, zero fluff.
 
-        Then provide the FULL Spanish translation with identical structure, signed as "Saludos cordiales,\n{owner_name} | SERP Hawk Digital Agency".
+        Then provide the FULL Spanish translation with identical structure, signed as:
+        "Saludos cordiales,\\n{owner_name}\\nFundador, DaPros\\ncontacto@dapros.com.mx | +52 33 3184 9546"
 
-        Then provide a short, punchy WhatsApp message (English only) to send to them. Keep it under 50 words. It should be casual but professional, mention the opportunity, and ask for a quick chat.
-
-        Then provide a short, punchy WhatsApp message (English only) to send to them. Keep it under 50 words. It should be casual but professional, mention the opportunity, and ask for a quick chat.
+        Then a short WhatsApp message (Spanish preferred, under 50 words). Casual but professional, reference the opportunity, ask for a quick chat.
 
         Return a JSON object with exactly these fields:
         {{
@@ -304,11 +377,15 @@ def generate_email(analysis, contact=None, recommended_services=None, owner_name
         )
 
         result = json.loads(response.choices[0].message.content)
-        # Ensure backward compatibility with 'body' key
+        if not result.get("english_body") and not result.get("spanish_body"):
+            return generate_dapros_fallback_draft(company_name, what_they_do, services_list_str, contact, owner_name)
+
         result["body"] = result.get("english_body", "") + "\n\n" + result.get("spanish_body", "")
         return result
     except Exception as e:
-        return {"subject": "Error", "english_body": str(e), "spanish_body": "", "body": str(e)}
+        print(f"[generate_email] Falling back to DaPros crafted template due to: {e}")
+        return generate_dapros_fallback_draft(company_name, what_they_do, services_list_str, contact, owner_name)
+
 
 def analyze_document(image_bytes):
     """

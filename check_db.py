@@ -1,12 +1,21 @@
-from sqlmodel import Session, select
-from database import ClientResearch, Lead, engine
-with Session(engine) as sess:
-    leads = sess.exec(select(Lead)).all()
-    print("Leads in DB:")
-    for lead in leads:
-        cr = sess.exec(select(ClientResearch).where(ClientResearch.lead_id == lead.id)).first()
-        status = "Has Data" if cr and cr.email_agent_data else "No Data"
-        if cr and cr.email_agent_data:
-            has_markdown = "full_markdown_report" in cr.email_agent_data
-            status += f" (Markdown: {has_markdown})"
-        print(f"[{lead.id}] {lead.company_name} - {status}")
+from database import engine
+from sqlalchemy import text
+
+with engine.connect() as conn:
+    result = conn.execute(text("""
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+        ORDER BY table_name;
+    """))
+    tables = [row[0] for row in result.fetchall()]
+    print(f"Total tables: {len(tables)}")
+    non_empty = []
+    for t in tables:
+        try:
+            cnt = conn.execute(text(f'SELECT count(*) FROM "{t}"')).scalar()
+            if cnt > 0:
+                non_empty.append((t, cnt))
+        except Exception as e:
+            pass
+    print("Non-empty tables:", non_empty)

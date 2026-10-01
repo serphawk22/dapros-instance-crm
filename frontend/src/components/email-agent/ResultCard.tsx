@@ -265,10 +265,10 @@ export function ResultCard({ historyId, result, companyName, companyUrl, onSendM
   const [editableEnglishBody, setEditableEnglishBody] = useState(formatBody(result.draft?.english_body || result.draft?.body));
   const [editableSpanishBody, setEditableSpanishBody] = useState(formatBody(result.draft?.spanish_body));
   const [editableWhatsappBody, setEditableWhatsappBody] = useState(formatBody(result.draft?.whatsapp_draft));
-  const [fromEmail, setFromEmail] = useState("support.crm@serphawk.in");
+  const [fromEmail, setFromEmail] = useState("contacto@dapros.com.mx");
 
   const extractedEmailsArray = (Array.isArray(result.company_info?.extracted_emails) ? result.company_info.extracted_emails : (result.company_info?.extracted_emails?.split(",") || []))
-    .filter((e: string) => e.trim().toLowerCase() !== "test@example.com" && e.trim().toLowerCase() !== "support.crm@serphawk.in");
+    .filter((e: string) => e.trim().toLowerCase() !== "test@example.com" && e.trim().toLowerCase() !== "support.crm@serphawk.in" && e.trim().toLowerCase() !== "contacto@dapros.com.mx" && e.trim().toLowerCase() !== "contact@scmbpo.com");
   const extractedEmail = extractedEmailsArray[0]?.trim();
   const directContactEmail = Array.isArray((result.company_info as any)?.contacts) ? (result.company_info as any).contacts[0]?.email : (result.company_info as any)?.email;
   
@@ -276,7 +276,7 @@ export function ResultCard({ historyId, result, companyName, companyUrl, onSendM
   if (Array.isArray(rawInitialEmail)) rawInitialEmail = rawInitialEmail[0];
   let initialContactEmail = typeof rawInitialEmail === 'string' ? rawInitialEmail : String(rawInitialEmail || "");
   
-  if (initialContactEmail.trim().toLowerCase() === "test@example.com" || initialContactEmail.trim().toLowerCase() === "support.crm@serphawk.in") {
+  if (initialContactEmail.trim().toLowerCase() === "test@example.com" || initialContactEmail.trim().toLowerCase() === "support.crm@serphawk.in" || initialContactEmail.trim().toLowerCase() === "contacto@dapros.com.mx" || initialContactEmail.trim().toLowerCase() === "contact@scmbpo.com") {
     initialContactEmail = "";
   }
 
@@ -488,7 +488,7 @@ export function ResultCard({ historyId, result, companyName, companyUrl, onSendM
                     ? result.company_info.extracted_emails 
                     : result.company_info.extracted_emails.split(',')
                   )
-                  .filter((e: string) => e.trim().toLowerCase() !== "test@example.com" && e.trim().toLowerCase() !== "support.crm@serphawk.in")
+                  .filter((e: string) => e.trim().toLowerCase() !== "test@example.com" && e.trim().toLowerCase() !== "support.crm@serphawk.in" && e.trim().toLowerCase() !== "contacto@dapros.com.mx" && e.trim().toLowerCase() !== "contact@scmbpo.com")
                   .map((e: string, i: number) => (
                     <CopyableEmailItem key={i} email={e.trim()} />
                   ))
@@ -662,7 +662,7 @@ export function ResultCard({ historyId, result, companyName, companyUrl, onSendM
                   <span className="text-slate-500 w-12">From:</span>
                   <input 
                     type="text" 
-                    value="contact@scmbpo.com"
+                    value="contacto@dapros.com.mx"
                     readOnly
                     disabled
                     className="flex-1 rounded-lg border border-slate-200 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 px-3 py-1.5 text-sm text-slate-500 cursor-not-allowed focus:outline-none transition-all"

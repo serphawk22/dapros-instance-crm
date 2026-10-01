@@ -1353,6 +1353,8 @@ def create_db_and_tables():
     """
     Create all database tables (drops existing tables first to ensure schema matches)
     """
+    if os.path.exists(".schema_created"):
+        return
     # Create all tables if they don't exist
     SQLModel.metadata.create_all(engine)
     

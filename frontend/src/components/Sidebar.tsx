@@ -113,26 +113,15 @@ const defaultSidebarSections = [
     items: [
       { id: "item-cases", name: "Cases", icon: "HeadphonesIcon", href: "/support/cases", roles: ["Admin", "SalesManager", "Demo"] },
       { id: "item-solutions", name: "Solutions", icon: "BookOpen", href: "/support/solutions", roles: ["Admin", "SalesManager", "Demo"] },
-      { id: "item-scmhub-cases", name: "SCMHub Cases", icon: "Cloud", href: "/support/scmhub-cases", roles: ["Admin", "SalesManager", "Demo"] },
-    ],
-  },
-  {
-    id: "section-system",
-    heading: "SYSTEM",
-    items: [
-      { id: "item-import", name: "Import Data", icon: "FileBarChart2", href: "/import", roles: ["Admin", "SalesManager", "Demo"] },
-      { id: "item-api-intelligence", name: "API Intelligence", icon: "Activity", href: "/admin/api-intelligence", roles: ["Admin", "SuperAdmin"] },
-      { id: "item-demo-accounts", name: "Demo Account Data", icon: "Users", href: "/admin/telemetry", roles: ["Admin", "SuperAdmin"] },
     ],
   },
 ];
 
 // --- Sortable Section Component ---
-const DEFAULT_HEADINGS = ["CRM", "PROJECTS & ACTIVITIES", "TEAMS", "AI AGENTS", "INVENTORY", "SUPPORT", "SYSTEM"];
+const DEFAULT_HEADINGS = ["CRM", "PROJECTS & ACTIVITIES", "TEAMS", "AI AGENTS", "INVENTORY", "SUPPORT"];
 const ITEM_KEY_OVERRIDES: Record<string, string> = {
   "item-teams": "team_directory",
   "item-products": "catalog",
-  "item-import": "import_data",
 };
 function sidebarItemKey(id: string): string {
   return ITEM_KEY_OVERRIDES[id] || String(id).replace("item-", "").replace(/-/g, "_");
@@ -389,8 +378,10 @@ export function Sidebar({ role }: SidebarProps) {
             const savedSectionIds = new Set(savedSections.map((s: any) => s.id));
             const missingSections = defaultSidebarSections.filter(s => !savedSectionIds.has(s.id));
             
-            // Deep merge: update existing items with latest roles/icons and add missing items
-            const mergedSections = savedSections.map((savedSec: any) => {
+            const validSectionIds = new Set(defaultSidebarSections.map(s => s.id));
+            const mergedSections = savedSections
+              .filter((savedSec: any) => validSectionIds.has(savedSec.id))
+              .map((savedSec: any) => {
               const updatedSavedItems = savedSec.items.map((savedItem: any) => {
                 let defaultItemRef = null;
                 for (const ds of defaultSidebarSections) {
@@ -416,9 +407,13 @@ export function Sidebar({ role }: SidebarProps) {
               ...sec,
               items: (sec.items || []).filter((i: any) =>
                 !String(i.id || "").toLowerCase().includes("automation") &&
-                !String(i.href || "").toLowerCase().includes("automation")),
+                !String(i.href || "").toLowerCase().includes("automation") &&
+                i.id !== "item-scmhub-cases" &&
+                i.id !== "item-import" &&
+                i.id !== "item-api-intelligence" &&
+                i.id !== "item-demo-accounts"),
             });
-            const mergedSectionsClean = mergedSections.map(stripDisabled);
+            const mergedSectionsClean = mergedSections.map(stripDisabled).filter((s: any) => (s.items || []).length > 0);
             
             if (missingSections.length > 0) {
               setSections([...mergedSectionsClean, ...missingSections.map(stripDisabled)]);
@@ -593,12 +588,8 @@ export function Sidebar({ role }: SidebarProps) {
       >
         {/* ── TOP BRANDING ── */}
         <div className={cn("shrink-0 flex items-center py-2.5", collapsed ? "justify-center px-2" : "px-4 gap-3")}>
-          <div className="shrink-0 w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-md">
-            <svg viewBox="0 0 24 24" fill="none" className="w-4 h-4">
-              <path d="M12 3L3 8.5V15.5L12 21L21 15.5V8.5L12 3Z" fill="white" fillOpacity="0.9" />
-              <path d="M12 7L7 10V14L12 17L17 14V10L12 7Z" fill="white" fillOpacity="0.5" />
-              <circle cx="12" cy="12" r="2" fill="white" />
-            </svg>
+          <div className="shrink-0 w-8 h-8 rounded-xl bg-white border border-slate-200 dark:border-zinc-700 flex items-center justify-center shadow-sm overflow-hidden p-0.5">
+            <img src="/dapros_logo.png" alt="DaPros" className="w-full h-full object-contain" />
           </div>
 
           <AnimatePresence>
@@ -611,8 +602,8 @@ export function Sidebar({ role }: SidebarProps) {
                 className="flex-1 min-w-0 overflow-hidden flex items-center justify-between"
               >
                 <div>
-                  <span className="block font-bold text-[14px] leading-tight tracking-tight truncate" style={{ color: "var(--text-primary)" }}>SERP Hawk</span>
-                  <span className="block text-[10px] font-medium truncate" style={{ color: "var(--text-secondary)" }}>{t("sidebar.corporate_hq")}</span>
+                  <span className="block font-bold text-[14px] leading-tight tracking-tight truncate" style={{ color: "var(--text-primary)" }}>DaPros</span>
+                  <span className="block text-[10px] font-medium truncate" style={{ color: "var(--text-secondary)" }}>Agencia Digital &amp; SEO</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <button

@@ -2,37 +2,41 @@
 import json
 from modules.llm_engine import analyze_content
 
-# Dapros services (can be loaded from DB/config in future)
+# Dapros services matching official business catalog
 DAPROS_SERVICES = [
-    "Local and Organic SEO",
-    "PPC Advertising",
-    "Web Development",
-    "Artificial intelligence",
-    "Ecommerce",
-    "Secure Hosting"
+    "Graphic Design & Branding",
+    "Digital Marketing & Ads",
+    "Web Design & Development",
+    "SEO & Organic Positioning",
+    "AI & Automation",
+    "E-commerce Solutions"
 ]
 
 def map_services_to_dapros(company_services, dapros_services=DAPROS_SERVICES):
     """
     Use OpenAI to map company services to dapros services.
+    Falls back gracefully if OpenAI is unreachable.
     """
-    # Compose a prompt for mapping
-    prompt = f"""
-    You are an expert B2B analyst. Given the following list of company services and Dapros's services, map each company service to the most relevant Dapros service (or 'None' if no match). Return a JSON object with a "mappings" key containing a list of objects like:
-    {{"mappings": [{{"company_service": "...", "dapros_service": "..."}}]}}
+    try:
+        from modules.llm_engine import get_openai_client
+        client = get_openai_client()
+        prompt = f"""
+        You are an expert B2B analyst. Given the following list of company services and Dapros's services, map each company service to the most relevant Dapros service (or 'None' if no match). Return a JSON object with a "mappings" key containing a list of objects like:
+        {{"mappings": [{{"company_service": "...", "dapros_service": "..."}}]}}
 
-    Company Services: {json.dumps(company_services)}
-    Dapros Services: {json.dumps(dapros_services)}
-    """
-    from modules.llm_engine import get_openai_client
-    client = get_openai_client()
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"}
-    )
-    result = json.loads(response.choices[0].message.content)
-    return result.get("mappings", [])
+        Company Services: {json.dumps(company_services)}
+        Dapros Services: {json.dumps(dapros_services)}
+        """
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}
+        )
+        result = json.loads(response.choices[0].message.content)
+        return result.get("mappings", [])
+    except Exception as e:
+        logger.warning(f"[map_services_to_dapros] OpenAI mapping failed: {e}. Using rule-based fallback.")
+        return [{"company_service": s, "dapros_service": "Web Design & Development"} for s in (company_services or ["Web Presence"])]
 
 async def research_and_map_company(url, dapros_services=DAPROS_SERVICES):
     """
@@ -53,24 +57,30 @@ async def research_and_map_company(url, dapros_services=DAPROS_SERVICES):
     # Try to extract company services from analysis (fallback to empty list)
     company_services = analysis.get("key_value_props") or []
     mapping = map_services_to_dapros(company_services, dapros_services)
+    
     # Suggest inbound/outbound requests
-    prompt = f"""
-    Given the following mapping between a company's services and Dapros's services, suggest:
-    - 2 outbound service requests (Dapros to company)
-    - 2 inbound service requests (company to Dapros)
-    Return as JSON: {{"outbound": [..], "inbound": [..]}}
+    suggestions = {"outbound": ["Web Design & Development", "Digital Marketing & Ads"], "inbound": ["Digital Consulting"]}
+    try:
+        prompt = f"""
+        Given the following mapping between a company's services and Dapros's services, suggest:
+        - 2 outbound service requests (Dapros to company)
+        - 2 inbound service requests (company to Dapros)
+        Return as JSON: {{"outbound": [..], "inbound": [..]}}
 
-    Mapping: {json.dumps(mapping)}
-    Dapros Services: {json.dumps(dapros_services)}
-    """
-    from modules.llm_engine import get_openai_client
-    client = get_openai_client()
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"}
-    )
-    suggestions = json.loads(resp.choices[0].message.content)
+        Mapping: {json.dumps(mapping)}
+        Dapros Services: {json.dumps(dapros_services)}
+        """
+        from modules.llm_engine import get_openai_client
+        client = get_openai_client()
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}
+        )
+        suggestions = json.loads(resp.choices[0].message.content)
+    except Exception as e:
+        logger.warning(f"[research_and_map_company] Suggestions failed: {e}. Using defaults.")
+
     return {
         "company_analysis": analysis,
         "service_mapping": mapping,

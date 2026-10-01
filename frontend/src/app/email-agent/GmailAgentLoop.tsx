@@ -103,7 +103,7 @@ export default function GmailAgentLoop() {
         const res = await fetch(`${API_BASE_URL}/smart-research`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ company_name: derivedName, company_url: cleanUrl }),
+          body: JSON.stringify({ company_name: derivedName, company_url: cleanUrl, owner_name: "Emmanuel Padilla" }),
         });
         if (!res.ok) throw new Error(`Research failed (${res.status})`);
         const data = await res.json();

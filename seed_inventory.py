@@ -1,71 +1,77 @@
-from sqlmodel import Session
+from sqlmodel import Session, select
 from database import engine, MarketplaceService
 
 def seed_inventory():
     """
-    Seeds the MarketplaceService table with inventory for dapros.com.mx 
-    and Serphawk/Anjali team services.
+    Seeds the MarketplaceService table with inventory for DaPros
     """
     services = [
-        # DaPros / Serphawk Services
         {
-            "name": "Comprehensive SEO Audit",
+            "service_name": "Comprehensive SEO Audit & Strategy",
             "category": "SEO",
-            "price": 299.00,
-            "description": "In-depth technical and on-page SEO audit for dapros.com.mx standard.",
-            "features": "Technical Analysis, Content Gap Analysis, Backlink Audit, Actionable Report",
-            "provider": "Serphawk / Anjali Team",
-            "is_active": True
+            "estimated_cost": 299.00,
+            "description": "In-depth technical, speed and on-page SEO audit for dapros.com.mx standards.",
+            "provider_name": "DaPros Marketing",
+            "is_active": True,
+            "tenant_id": 1,
         },
         {
-            "name": "Local SEO Optimization",
+            "service_name": "Local SEO & Google Business Profile",
             "category": "SEO",
-            "price": 499.00,
-            "description": "Google My Business setup and ongoing local citation building.",
-            "features": "GMB Optimization, Citation Building, Local Keyword Targeting, Monthly Reporting",
-            "provider": "Serphawk / Anjali Team",
-            "is_active": True
+            "estimated_cost": 499.00,
+            "description": "Google My Business setup, local citation building and Google Maps ranking.",
+            "provider_name": "DaPros Marketing",
+            "is_active": True,
+            "tenant_id": 1,
         },
         {
-            "name": "Content Marketing Package - Tier 1",
-            "category": "Content",
-            "price": 799.00,
-            "description": "High-quality, SEO-optimized blog posts and articles.",
-            "features": "4 Blog Posts/mo, Keyword Research, Meta Tags, Publishing on CMS",
-            "provider": "DaPros Content Team",
-            "is_active": True
-        },
-        {
-            "name": "Website Development (Next.js/React)",
+            "service_name": "Desarrollo Web Next.js & React",
             "category": "Development",
-            "price": 1999.00,
-            "description": "Custom modern web application development using Next.js.",
-            "features": "Responsive Design, SEO Friendly, Fast Loading, Custom Features",
-            "provider": "DaPros Engineering",
-            "is_active": True
+            "estimated_cost": 1999.00,
+            "description": "Custom modern high-converting web application and landing page development.",
+            "provider_name": "DaPros Engineering",
+            "is_active": True,
+            "tenant_id": 1,
         },
         {
-            "name": "Monthly Link Building Outreach",
-            "category": "SEO",
-            "price": 599.00,
-            "description": "High DA backlink outreach campaigns.",
-            "features": "Guest Posting, Broken Link Building, Niche Edits",
-            "provider": "Serphawk Outreach Team",
-            "is_active": True
+            "service_name": "Gestión de Campañas Google & Meta Ads",
+            "category": "Marketing",
+            "estimated_cost": 799.00,
+            "description": "High ROI paid traffic management across Google Ads, Instagram and Facebook.",
+            "provider_name": "DaPros Ads Team",
+            "is_active": True,
+            "tenant_id": 1,
+        },
+        {
+            "service_name": "Diseño Gráfico & Identidad Visual",
+            "category": "Design",
+            "estimated_cost": 599.00,
+            "description": "Full brand identity: logos, brand manuals, and digital advertising collateral.",
+            "provider_name": "DaPros Creative",
+            "is_active": True,
+            "tenant_id": 1,
+        },
+        {
+            "service_name": "Automatización con IA & Chatbots",
+            "category": "AI Automation",
+            "estimated_cost": 899.00,
+            "description": "Intelligent AI assistant integration and CRM workflow automation for businesses.",
+            "provider_name": "DaPros AI Lab",
+            "is_active": True,
+            "tenant_id": 1,
         }
     ]
 
     with Session(engine) as session:
         for s_data in services:
-            # Check if exists
-            from sqlmodel import select
-            existing = session.exec(select(MarketplaceService).where(MarketplaceService.name == s_data["name"])).first()
+            existing = session.exec(
+                select(MarketplaceService).where(MarketplaceService.service_name == s_data["service_name"])
+            ).first()
             if not existing:
                 service = MarketplaceService(**s_data)
                 session.add(service)
-        
         session.commit()
-        print("Successfully seeded inventory for dapros.com.mx and Serphawk/Anjali team.")
+        print("Successfully seeded marketplace inventory for DaPros.")
 
 if __name__ == "__main__":
     seed_inventory()

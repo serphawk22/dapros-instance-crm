@@ -81,7 +81,7 @@ export default function LoginPage() {
   };
 
   const handleDemoLogin = () => {
-    setEmail("admin@serphawk.com");
+    setEmail("contacto@dapros.com.mx");
     setPassword("Admin123!");
     setError("");
   };
@@ -110,13 +110,11 @@ export default function LoginPage() {
         <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-white/20 dark:border-zinc-800 shadow-2xl rounded-3xl p-8 sm:p-10">
           
           <div className="flex flex-col items-center mb-8 text-center">
-            <div className="w-12 h-12 rounded-xl bg-indigo-600 flex items-center justify-center mb-5 shadow-lg shadow-indigo-600/20">
-              <svg viewBox="0 0 24 24" fill="none" className="w-6 h-6" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 3L3 8.5V15.5L12 21L21 15.5V8.5L12 3Z" className="fill-white" />
-              </svg>
+            <div className="h-14 px-4 py-2 rounded-2xl bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 flex items-center justify-center mb-5 shadow-sm">
+              <img src="/dapros_logo.png" alt="DaPros" className="h-9 w-auto object-contain" />
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white mb-2">Welcome back</h1>
-            <p className="text-slate-500 dark:text-zinc-400 text-sm">Sign in to your SERP Hawk workspace.</p>
+            <p className="text-slate-500 dark:text-zinc-400 text-sm">Sign in to your DaPros workspace.</p>
           </div>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-5">

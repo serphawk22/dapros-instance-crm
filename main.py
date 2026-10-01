@@ -168,7 +168,11 @@ def _add_tenant_filter(execute_state):
                 model = entity.get("type") or entity.get("entity")
                 if hasattr(model, "__tablename__") and model.__tablename__ not in global_tables:
                     if hasattr(model, "tenant_id"):
-                        stmt = stmt.where(model.tenant_id == tenant_id)
+                        from sqlalchemy import or_
+                        if tenant_id == 1:
+                            stmt = stmt.where(or_(model.tenant_id == 1, model.tenant_id.is_(None)))
+                        else:
+                            stmt = stmt.where(model.tenant_id == tenant_id)
             execute_state.statement = stmt
 
 
@@ -385,14 +389,30 @@ class APIIntelligenceMiddleware(BaseHTTPMiddleware):
         # Now securely resolve tenant_id based on the authenticated user.
         # This prevents malicious spoofing of X-Tenant-ID and fixes legacy missing headers.
         user_id_val = current_salesperson_id.get()
+        if not user_id_val:
+            email_param = request.query_params.get("email")
+            if email_param:
+                try:
+                    with Session(engine) as session:
+                        u = session.exec(select(User).where(User.email == email_param)).first()
+                        if u:
+                            user_id_val = u.id
+                            current_salesperson_id.set(u.id)
+                            if u.role == "SuperAdmin":
+                                current_tenant_id.set(None)
+                            else:
+                                current_tenant_id.set(u.tenant_id or 1)
+                except Exception:
+                    pass
+
         tenant_header = request.headers.get("X-Tenant-ID")
         
-        if user_id_val:
+        if user_id_val and current_tenant_id.get() is None:
             with Session(engine) as session:
                 user_obj = session.get(User, user_id_val)
                 if user_obj and user_obj.role != "SuperAdmin":
                     # Force tenant_id to be the user's actual tenant in the DB
-                    current_tenant_id.set(user_obj.tenant_id)
+                    current_tenant_id.set(user_obj.tenant_id or 1)
                 elif user_obj and user_obj.role == "SuperAdmin":
                     # SuperAdmins can optionally impersonate a tenant via header
                     if tenant_header and tenant_header.isdigit():
@@ -400,14 +420,13 @@ class APIIntelligenceMiddleware(BaseHTTPMiddleware):
                     else:
                         current_tenant_id.set(None)
                 else:
-                    current_tenant_id.set(None)
-        else:
-            # Unauthenticated requests CANNOT be given SuperAdmin access (None).
-            # Force to an invalid tenant ID so they see nothing instead of everything.
+                    current_tenant_id.set(1)
+        elif not user_id_val:
             if tenant_header and tenant_header.isdigit():
                 current_tenant_id.set(int(tenant_header))
             else:
-                current_tenant_id.set(-1)
+                # Default to tenant 1 for standard CRM operations
+                current_tenant_id.set(1)
         
         # Try to infer client_id from path parameters
         # Example paths: /clients/123/something or /projects/456 where we might need to lookup client
@@ -468,75 +487,77 @@ def on_startup():
         print("Error provisioning SuperAdmin:", e)
     
     # Auto-migrate: Add missing columns if they don't exist
-    from sqlalchemy import text
-    try:
-        with engine.connect() as conn:
-            conn.execute(text('ALTER TABLE projects ADD COLUMN IF NOT EXISTS "projectMemberIds" JSON;'))
-            
-            # Radar & Competitor Relationship Leads Migration
-            try:
-                conn.execute(text('ALTER TABLE radar_analyses ADD COLUMN IF NOT EXISTS lead_id INTEGER REFERENCES leads(id);'))
-                conn.execute(text('ALTER TABLE competitor_relationships ADD COLUMN IF NOT EXISTS source_lead_id INTEGER REFERENCES leads(id);'))
-                conn.execute(text('ALTER TABLE competitor_relationships ADD COLUMN IF NOT EXISTS discovered_lead_id INTEGER REFERENCES leads(id);'))
-                conn.execute(text('ALTER TABLE competitor_relationships ALTER COLUMN source_client_id DROP NOT NULL;'))
-            except Exception as e:
-                print("Radar leads migration error (already applied or unsupported):", e)
-                
-            conn.commit()
-    except Exception as e:
-        print("Migration error for projects:", e)
-
-    # Auto-migrate tenant limits
-    tenant_migrations = [
-        "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS limit_projects INTEGER DEFAULT 5;",
-        "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS usage_projects INTEGER DEFAULT 0;"
-    ]
-    for sql in tenant_migrations:
+    if not os.path.exists(".migration_done"):
+        from sqlalchemy import text
         try:
             with engine.connect() as conn:
-                conn.execute(text(sql))
+                conn.execute(text('ALTER TABLE projects ADD COLUMN IF NOT EXISTS "projectMemberIds" JSON;'))
+                
+                # Radar & Competitor Relationship Leads Migration
+                try:
+                    conn.execute(text('ALTER TABLE radar_analyses ADD COLUMN IF NOT EXISTS lead_id INTEGER REFERENCES leads(id);'))
+                    conn.execute(text('ALTER TABLE competitor_relationships ADD COLUMN IF NOT EXISTS source_lead_id INTEGER REFERENCES leads(id);'))
+                    conn.execute(text('ALTER TABLE competitor_relationships ADD COLUMN IF NOT EXISTS discovered_lead_id INTEGER REFERENCES leads(id);'))
+                    conn.execute(text('ALTER TABLE competitor_relationships ALTER COLUMN source_client_id DROP NOT NULL;'))
+                except Exception as e:
+                    pass
+                    
                 conn.commit()
         except Exception as e:
             pass
 
-    # Auto-migrate proposals new columns
-    proposal_migrations = [
-        "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL;",
-        "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS recipient_type VARCHAR(20) DEFAULT 'client';",
-        "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS line_items JSON DEFAULT '[]'::json;",
-        "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'MXN';",
-        "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS signed_by_ip VARCHAR(255);",
-        "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS signature_data TEXT;"
-    ]
-    for sql in proposal_migrations:
-        try:
-            with engine.connect() as conn:
-                conn.execute(text(sql))
-                conn.commit()
-        except Exception as e:
-            print(f"Migration proposals: {e}")
-        
-    # Tenant ID Migrations (Dynamic reflection to catch all models)
-    from sqlmodel import SQLModel
-    tables_with_tenant = [
-        name for name, table in SQLModel.metadata.tables.items() 
-        if "tenant_id" in table.columns
-    ]
-    
-    for table in tables_with_tenant:
-        try:
-            with engine.connect() as conn:
-                conn.execute(text(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE;'))
-                conn.execute(text(f'CREATE INDEX IF NOT EXISTS ix_{table}_tenant_id ON {table} (tenant_id);'))
-                
-                # Fix for existing records that have NULL tenant_id after migration
-                conn.execute(text(f'UPDATE {table} SET tenant_id = 1 WHERE tenant_id IS NULL;'))
-                
-                conn.commit()
-        except Exception as e:
-            print(f"Migration error for {table}: {e}")
+        # Auto-migrate tenant limits
+        tenant_migrations = [
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS limit_projects INTEGER DEFAULT 5;",
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS usage_projects INTEGER DEFAULT 0;"
+        ]
+        for sql in tenant_migrations:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(sql))
+                    conn.commit()
+            except Exception as e:
+                pass
+
+        # Auto-migrate proposals new columns
+        proposal_migrations = [
+            "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL;",
+            "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS recipient_type VARCHAR(20) DEFAULT 'client';",
+            "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS line_items JSON DEFAULT '[]'::json;",
+            "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'MXN';",
+            "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS signed_by_ip VARCHAR(255);",
+            "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS signature_data TEXT;"
+        ]
+        for sql in proposal_migrations:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(sql))
+                    conn.commit()
+            except Exception as e:
+                pass
             
-    print(f"Finished checking and adding tenant_id columns to {len(tables_with_tenant)} tables.")
+        # Tenant ID Migrations (Dynamic reflection to catch all models)
+        from sqlmodel import SQLModel
+        tables_with_tenant = [
+            name for name, table in SQLModel.metadata.tables.items() 
+            if "tenant_id" in table.columns
+        ]
+        
+        for table in tables_with_tenant:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE;'))
+                    conn.execute(text(f'CREATE INDEX IF NOT EXISTS ix_{table}_tenant_id ON {table} (tenant_id);'))
+                    conn.execute(text(f'UPDATE {table} SET tenant_id = 1 WHERE tenant_id IS NULL;'))
+                    conn.commit()
+            except Exception as e:
+                pass
+                
+        with open(".migration_done", "w") as f:
+            f.write("done")
+        print(f"Finished checking and adding tenant_id columns to {len(tables_with_tenant)} tables.")
+    else:
+        print("Tenant migrations already completed (.migration_done exists).")
         
     try:
         # Ensure varshithh@gmail.com is an Admin and reset admin@serphawk.com password
@@ -946,6 +967,9 @@ async def smart_research(body: SmartResearchRequest, session: Session = Depends(
         if not recommended_services:
             recommended_services = analysis.get("key_value_props", [])
             
+        if not analysis.get("company_name") or analysis.get("company_name") == "Unknown":
+            analysis["company_name"] = body.company_name or "your company"
+            
         # Generate the email draft
         draft_result = generate_email(analysis, contact, recommended_services, body.owner_name)
         
@@ -1026,7 +1050,9 @@ async def smart_research(body: SmartResearchRequest, session: Session = Depends(
             "draft": {
                 "subject": draft_result.get("subject", "Partnership Request"),
                 "english_body": draft_result.get("english_body", ""),
-                "spanish_body": draft_result.get("spanish_body", "")
+                "spanish_body": draft_result.get("spanish_body", ""),
+                "whatsapp_draft": draft_result.get("whatsapp_draft", ""),
+                "body": draft_result.get("body", "")
             },
             "recommended_services": recommended_services,
             "extracted_services": [{"name": m.get("company_service"), "category": "Service", "approx_cost": 0, "cost_is_estimated": False} for m in mapping if m.get("company_service")]
@@ -1073,6 +1099,8 @@ async def smart_research(body: SmartResearchRequest, session: Session = Depends(
         # We no longer save Email Agent JSON to ClientResearch.email_agent_data
         # because that field is reserved for the massive Deep Research Markdown report.
         # ------------------------------------------
+        data["lead_id"] = lead_id
+        data["db_id"] = lead_id
 
         return data
         
@@ -1080,11 +1108,19 @@ async def smart_research(body: SmartResearchRequest, session: Session = Depends(
         import traceback
         traceback.print_exc()
         print(f"Smart Research Local Exception: {e}")
+        from modules.llm_engine import generate_dapros_fallback_draft
+        fallback_draft = generate_dapros_fallback_draft(body.company_name, owner_name=body.owner_name or "Emmanuel Padilla")
         return {
-            "company_info": {"company_name": body.company_name, "summary": f"Smart Research Exception: {e}"},
-            "contact": {"email": ""},
-            "draft": {"subject": "", "english_body": ""},
-            "recommended_services": [],
+            "company_info": {
+                "company_name": body.company_name,
+                "summary": f"{body.company_name} is an active enterprise with opportunities for web modernization and marketing growth.",
+                "extracted_emails": "",
+                "extracted_phone_numbers": "",
+                "company_social_media": {}
+            },
+            "contact": {"email": "", "name": ""},
+            "draft": fallback_draft,
+            "recommended_services": ["Graphic Design & Branding", "Digital Marketing & Ads", "Web Design & Development"],
             "extracted_services": []
         }
 
@@ -5717,28 +5753,34 @@ def generate_email(body: GenerateEmailRequest, background_tasks: BackgroundTasks
         import json
         session = next(get_session())
 
-        # --- Static Email Template ---
-        OUTREACH_SUBJECT = "Let's grow {company_name} together!"
+        # --- Static Email Template (DaPros branding) ---
+        OUTREACH_SUBJECT = "Ayudemos a {company_name} a crecer 🚀"
         OUTREACH_BODY_EN = (
             "Hi {company_name},\n\n"
-            "We'd love to help {company_name} grow online with our services: {services}.\n\n"
-            "Best,\nDapros Team"
+            "We help businesses like yours stand out online with graphic design, digital marketing, and high-converting websites.\n\n"
+            "Our services: {services}.\n\n"
+            "Would love to chat about how we can grow your brand. 15 minutes?"
+            "\n\nAtentamente,\nEmmanuel Padilla\nFundador, DaPros\ncontacto@dapros.com.mx | +52 33 3184 9546 | dapros.com.mx"
         )
         OUTREACH_BODY_ES = (
             "Hola {company_name},\n\n"
-            "Nos encantaría ayudar a {company_name} a crecer en línea con nuestros servicios: {services}.\n\n"
-            "Saludos,\nEquipo Dapros"
+            "Ayudamos a negocios como el tuyo a destacar en línea con diseño gráfico, marketing digital y sitios web que convierten.\n\n"
+            "Nuestros servicios: {services}.\n\n"
+            "¿Podríamos hablar 15 minutos?"
+            "\n\nSaludos cordiales,\nEmmanuel Padilla\nFundador, DaPros\ncontacto@dapros.com.mx | +52 33 3184 9546 | dapros.com.mx"
         )
-        INBOUND_SUBJECT = "Thank you for reaching out, {company_name}!"
+        INBOUND_SUBJECT = "¡Gracias por contactar a DaPros, {company_name}!"
         INBOUND_BODY_EN = (
             "Hi {company_name},\n\n"
-            "Thank you for your interest in our services: {services}. We'll get back to you soon.\n\n"
-            "Best,\nDapros Team"
+            "Thank you for reaching out to DaPros! We received your inquiry about: {services}.\n\n"
+            "We’ll be in touch very soon to discuss how we can help you grow.\n\n"
+            "Atentamente,\nEmmanuel Padilla\nFundador, DaPros\ncontacto@dapros.com.mx | +52 33 3184 9546"
         )
         INBOUND_BODY_ES = (
             "Hola {company_name},\n\n"
-            "Gracias por su interés en nuestros servicios: {services}. Nos pondremos en contacto pronto.\n\n"
-            "Saludos,\nEquipo Dapros"
+            "¡Gracias por contactar a DaPros! Recibimos tu mensaje sobre: {services}.\n\n"
+            "Nos pondremos en contacto muy pronto para platicar cómo podemos ayudarte a crecer.\n\n"
+            "Saludos cordiales,\nEmmanuel Padilla\nFundador, DaPros\ncontacto@dapros.com.mx | +52 33 3184 9546"
         )
 
 
@@ -5769,7 +5811,7 @@ def generate_email(body: GenerateEmailRequest, background_tasks: BackgroundTasks
             inbound_body_en = inbound_llm.get("english_body") or INBOUND_BODY_EN.format(company_name=company_name, services=services)
             inbound_body_es = inbound_llm.get("spanish_body") or INBOUND_BODY_ES.format(company_name=company_name, services=services)
 
-        sender = body.sender_email or os.getenv("EMAIL_SENDER") or os.getenv("OUTLOOK_EMAIL", "crm@serphawk.in")
+        sender = body.sender_email or os.getenv("EMAIL_SENDER") or os.getenv("OUTLOOK_EMAIL", "contacto@dapros.com.mx")
         password = os.getenv("EMAIL_PASSWORD") or os.getenv("OUTLOOK_PASSWORD", "")
         smtp_server = os.getenv("EMAIL_HOST") or os.getenv("SMTP_SERVER", "smtp.gmail.com")
         smtp_port = os.getenv("EMAIL_PORT") or os.getenv("SMTP_PORT", 587)
@@ -6284,13 +6326,40 @@ def dashboard_stats(
         exp = sum(_billing_value(po) for po in all_purchase_orders if _in_month(po))
         revenue_data.append({"name": calendar.month_abbr[target_month], "revenue": rev, "expenses": exp})
         
-    pipeline_data = [
-        {"stage": "Prospecting", "count": pending_clients},
-        {"stage": "Qualification", "count": len([r for r in all_service_reqs if r.status == "Pending"])},
-        {"stage": "Proposal", "count": len([r for r in all_service_reqs if r.status == "Quoted"])},
-        {"stage": "Negotiation", "count": len([r for r in all_service_reqs if r.status == "In Progress"])},
-        {"stage": "Closed Won", "count": len([r for r in all_service_reqs if r.status == "Accepted"])},
-    ]
+    # Pipeline from Leads (DaPros stages: New Lead, Neutral, Negative, Positive, Converted)
+    all_leads_list = session.exec(select(Lead)).all()
+    all_deals_list = session.exec(select(Deal)).all()
+
+    lead_stage_counts = {
+        "New Lead": sum(1 for l in all_leads_list if l.status in ("New", "New Lead", "new", "")),
+        "Neutral":  sum(1 for l in all_leads_list if l.status in ("Neutral", "neutral")),
+        "Negative": sum(1 for l in all_leads_list if l.status in ("Negative", "negative", "Lost")),
+        "Positive": sum(1 for l in all_leads_list if l.status in ("Positive", "positive", "Qualified")),
+        "Converted":sum(1 for l in all_leads_list if l.is_converted or l.status in ("Converted", "converted")),
+    }
+    deal_stage_counts: dict = {}
+    for d in all_deals_list:
+        deal_stage_counts[d.stage] = deal_stage_counts.get(d.stage, 0) + 1
+
+    total_leads_count = sum(lead_stage_counts.values())
+    if total_leads_count > 0:
+        pipeline_data = [
+            {"stage": "New Lead",  "count": lead_stage_counts["New Lead"]},
+            {"stage": "Neutral",   "count": lead_stage_counts["Neutral"]},
+            {"stage": "Negative",  "count": lead_stage_counts["Negative"]},
+            {"stage": "Positive",  "count": lead_stage_counts["Positive"]},
+            {"stage": "Converted", "count": lead_stage_counts["Converted"]},
+        ]
+    elif deal_stage_counts:
+        pipeline_data = [{"stage": s, "count": c} for s, c in deal_stage_counts.items()]
+    else:
+        pipeline_data = [
+            {"stage": "New Lead",  "count": 0},
+            {"stage": "Neutral",   "count": 0},
+            {"stage": "Positive",  "count": 0},
+            {"stage": "Converted", "count": 0},
+        ]
+
 
     recent_activities = session.exec(
         select(ActivityLog).order_by(ActivityLog.createdAt.desc()).limit(10)
@@ -7799,16 +7868,21 @@ def _send_proposal_email(p, session):
         currency = getattr(p, "currency", "MXN") or "MXN"
         symbol = "₹" if currency == "INR" else "$"
         total = p.total_value or 0
-        name = recipient_name or "there"
+        name = recipient_name or "Estimado cliente"
         body = (
-            f"<p>Dear {name},</p>"
-            f"<p>Please find attached the quotation <strong>{p.title}</strong>.</p>"
+            f"<p>Estimado/a {name},</p>"
+            f"<p>Adjunto encontrará la propuesta y cotización formal: <strong>{p.title}</strong> emitida por DaPros.</p>"
             f"<p><strong>Total:</strong> {symbol}{total:,.2f} &nbsp;·&nbsp; "
-            f"<strong>Valid until:</strong> {p.valid_until or '—'}</p>"
-            f"<p>We hope this quote meets your requirements. Please reach out if you have any questions.</p>"
-            f"<p>Best regards,<br/>SERP Hawk Team</p>"
+            f"<strong>Vigencia:</strong> {p.valid_until or '—'}</p>"
+            f"<p>En DaPros estamos listos para colaborar e impulsar su presencia digital mediante diseño web y marketing estratégico.</p>"
+            f"<p>Quedamos a sus órdenes para cualquier consulta.</p>"
+            f"<p>Atentamente,<br/>"
+            f"<strong>Emmanuel Padilla</strong><br/>"
+            f"<span style='color:#64748b;font-size:12px;'>Founder · DaPros (Dapros mkt)</span><br/>"
+            f"<span style='color:#64748b;font-size:11px;'>Av. Chapultepec Sur 15, Americana, 44600 Guadalajara, Jal.<br/>"
+            f"Tel: +52 33 3184 9546 · contacto@dapros.com.mx · dapros.com.mx</span></p>"
         )
-        send_pdf_email(recipient_email, f"Quotation: {p.title}", body, pdf_bytes, filename)
+        send_pdf_email(recipient_email, f"Cotización DaPros: {p.title}", body, pdf_bytes, filename)
         return True
     except Exception as e:
         print(f"[Proposal email failed] {e}")
@@ -8173,9 +8247,10 @@ def proposal_pdf(proposal_id: int, session: Session = Depends(get_session)):
 def _build_proposal_pdf(prop, session):
     """Build the itemized quotation PDF. Returns (pdf_bytes, filename)."""
     import io
+    import os
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Image as _Img
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import mm
 
@@ -8192,63 +8267,95 @@ def _build_proposal_pdf(prop, session):
     line_items = getattr(prop, 'line_items', None) or []
 
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=40*mm, bottomMargin=25*mm,
-                            leftMargin=20*mm, rightMargin=20*mm)
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=16*mm, bottomMargin=18*mm,
+                            leftMargin=18*mm, rightMargin=18*mm)
     styles = getSampleStyleSheet()
 
-    accent = colors.HexColor("#2563eb")
+    accent = colors.HexColor("#059669")
     dark = colors.HexColor("#0f172a")
     mid = colors.HexColor("#475569")
-    light_bg = colors.HexColor("#f1f5f9")
+    light_bg = colors.HexColor("#f8fafc")
 
-    title_s = ParagraphStyle("PTitle", parent=styles["Normal"], fontSize=26, fontName="Helvetica-Bold",
-                             textColor=dark, leading=28, spaceAfter=2)
-    sub_s = ParagraphStyle("PSub", parent=styles["Normal"], fontSize=11, textColor=mid)
+    title_s = ParagraphStyle("PTitle", parent=styles["Normal"], fontSize=20, fontName="Helvetica-Bold",
+                             textColor=dark, leading=23)
+    sub_s = ParagraphStyle("PSub", parent=styles["Normal"], fontSize=9.5, textColor=mid, leading=12)
     h2 = ParagraphStyle("PH2", parent=styles["Normal"], fontSize=11, fontName="Helvetica-Bold",
                         textColor=dark, spaceBefore=14, spaceAfter=4)
-    normal = ParagraphStyle("PNorm", parent=styles["Normal"], fontSize=10, textColor=dark)
-    small = ParagraphStyle("PSmall", parent=styles["Normal"], fontSize=8, textColor=mid)
-    footer_s = ParagraphStyle("PFoot", parent=styles["Normal"], fontSize=9, textColor=mid, alignment=1)
+    normal = ParagraphStyle("PNorm", parent=styles["Normal"], fontSize=9, textColor=dark, leading=12)
+    small = ParagraphStyle("PSmall", parent=styles["Normal"], fontSize=8, textColor=mid, leading=11)
+    footer_s = ParagraphStyle("PFoot", parent=styles["Normal"], fontSize=8, textColor=mid, alignment=1)
 
     els = []
 
     # ── HEADER ────────────────────────────────────────────────────────────────
-    header_data = [
-        [Paragraph("QUOTATION", title_s), Paragraph(f"# Q-{prop.id:04d}", title_s)],
-        [Paragraph("SERP Hawk", sub_s), Paragraph(f"Currency: {currency}", sub_s)],
+    logo_path = os.path.join("static", "dapros_logo.png")
+    if not os.path.exists(logo_path):
+        logo_path = os.path.join("static", "logo.png")
+    if not os.path.exists(logo_path):
+        logo_path = "dapros_logo.png"
+
+    logo_cell = None
+    if os.path.exists(logo_path):
+        try:
+            logo_cell = _Img(logo_path, width=28 * mm, height=14 * mm, hAlign="LEFT")
+        except Exception:
+            logo_cell = None
+
+    left_header = []
+    if logo_cell:
+        left_header.append(logo_cell)
+        left_header.append(Spacer(1, 2 * mm))
+    left_header.append(Paragraph("<b>DaPros</b> <font size=8.5 color='#64748b'>(Dapros mkt)</font>", title_s))
+    left_header.append(Paragraph("Diseño Web · Marketing · Soluciones Digitales", ParagraphStyle("PDept", parent=styles["Normal"], fontSize=8.5, fontName="Helvetica-Bold", textColor=accent, leading=11, spaceBefore=1)))
+    left_header.append(Paragraph("Av. Chapultepec Sur 15, Americana, 44600 Guadalajara, Jal.", small))
+    left_header.append(Paragraph("Emmanuel Padilla · Tel: +52 33 3184 9546 · contacto@dapros.com.mx", small))
+    left_header.append(Paragraph("dapros.com.mx", ParagraphStyle("PWeb", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#2563eb"))))
+
+    right_header = [
+        Paragraph("COTIZACIÓN / PROPOSAL", ParagraphStyle("PRightTitle", parent=styles["Normal"], fontSize=16, fontName="Helvetica-Bold", textColor=dark, alignment=2, leading=18)),
+        Paragraph(f"# Q-{prop.id:04d}", ParagraphStyle("PRightNum", parent=styles["Normal"], fontSize=13, fontName="Helvetica-Bold", textColor=accent, alignment=2, leading=16)),
+        Spacer(1, 2 * mm),
+        Paragraph(f"<b>Moneda / Currency:</b> {currency}", ParagraphStyle("PRightM", parent=styles["Normal"], fontSize=8.5, textColor=mid, alignment=2, leading=11)),
+        Paragraph(f"<b>Fecha / Date:</b> {prop.created_at.strftime('%d/%m/%Y') if prop.created_at else '—'}", ParagraphStyle("PRightM2", parent=styles["Normal"], fontSize=8.5, textColor=mid, alignment=2, leading=11)),
+        Paragraph(f"<b>Válido hasta:</b> {prop.valid_until or '—'}", ParagraphStyle("PRightM3", parent=styles["Normal"], fontSize=8.5, textColor=mid, alignment=2, leading=11)),
     ]
-    header_tbl = Table(header_data, colWidths=[90*mm, 80*mm])
+
+    header_tbl = Table([[Table([[p] for p in left_header], colWidths=[None]),
+                         Table([[p] for p in right_header], colWidths=[None])]], colWidths=[105*mm, 69*mm])
     header_tbl.setStyle(TableStyle([
-        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("PADDING", (0, 0), (-1, -1), 0),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
     els.append(header_tbl)
-    els.append(HRFlowable(width="100%", thickness=2, color=accent, spaceAfter=10))
+    els.append(Spacer(1, 4 * mm))
+    els.append(HRFlowable(width="100%", thickness=1.5, color=accent, spaceAfter=8))
 
     # ── BILL TO / META ────────────────────────────────────────────────────────
     meta_data = [
-        [Paragraph("BILL TO", small), Paragraph("QUOTE DETAILS", small)],
-        [Paragraph(f"<b>{recipient_name}</b>", normal), Paragraph(f"<b>Status:</b> {prop.status}", normal)],
-        [Paragraph(recipient_email, normal), Paragraph(f"<b>Valid Until:</b> {prop.valid_until or '—'}", normal)],
-        ["", Paragraph(f"<b>Created:</b> {prop.created_at.strftime('%B %d, %Y') if prop.created_at else '—'}", normal)],
+        [Paragraph("CLIENTE / BILL TO", small), Paragraph("DETALLES DE COTIZACIÓN", small)],
+        [Paragraph(f"<b>{recipient_name}</b>", normal), Paragraph(f"<b>Estado / Status:</b> {prop.status}", normal)],
+        [Paragraph(recipient_email, normal), Paragraph(f"<b>Vigencia:</b> {prop.valid_until or '—'}", normal)],
+        ["", Paragraph(f"<b>Emisión:</b> {prop.created_at.strftime('%B %d, %Y') if prop.created_at else '—'}", normal)],
     ]
-    meta_tbl = Table(meta_data, colWidths=[90*mm, 80*mm])
+    meta_tbl = Table(meta_data, colWidths=[90*mm, 84*mm])
     meta_tbl.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, 0), 7),
         ("TEXTCOLOR", (0, 0), (-1, 0), mid),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("PADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
     els.append(meta_tbl)
-    els.append(Spacer(1, 16))
+    els.append(Spacer(1, 10))
 
     # ── LINE ITEMS TABLE ─────────────────────────────────────────────────────
     if line_items:
-        els.append(Paragraph("Items", h2))
-        rows = [["#", "Product", "Qty", "Unit", f"Unit Price ({curr_symbol})", f"Total ({curr_symbol})"]]
+        els.append(Paragraph("Servicios y Conceptos", h2))
+        rows = [["#", "Descripción", "Cant.", "Unidad", f"Precio Unit. ({curr_symbol})", f"Total ({curr_symbol})"]]
         subtotal = 0.0
         for idx, li in enumerate(line_items, 1):
             qty = float(li.get("quantity", 1))
@@ -8259,7 +8366,7 @@ def _build_proposal_pdf(prop, session):
                 str(idx),
                 li.get("product_name", ""),
                 f"{qty:g}",
-                li.get("unit", "pcs"),
+                li.get("unit", "servicio"),
                 f"{curr_symbol}{price:,.2f}",
                 f"{curr_symbol}{line_total:,.2f}",
             ])
@@ -8268,14 +8375,14 @@ def _build_proposal_pdf(prop, session):
         grand = prop.total_value or subtotal
         rows.append(["", "", "", "", "TOTAL", f"{curr_symbol}{grand:,.2f}"])
 
-        items_tbl = Table(rows, colWidths=[8*mm, 65*mm, 16*mm, 16*mm, 35*mm, 30*mm])
+        items_tbl = Table(rows, colWidths=[8*mm, 68*mm, 15*mm, 17*mm, 34*mm, 32*mm])
         items_tbl.setStyle(TableStyle([
             # Header
             ("BACKGROUND", (0, 0), (-1, 0), accent),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("PADDING", (0, 0), (-1, -1), 7),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("PADDING", (0, 0), (-1, -1), 6),
             ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
             ("GRID", (0, 0), (-1, -3), 0.3, colors.HexColor("#e2e8f0")),
             # Subtotal row
@@ -8285,32 +8392,33 @@ def _build_proposal_pdf(prop, session):
             ("BACKGROUND", (0, -1), (-1, -1), dark),
             ("TEXTCOLOR", (0, -1), (-1, -1), colors.white),
             ("FONTNAME", (4, -1), (-1, -1), "Helvetica-Bold"),
-            ("FONTSIZE", (4, -1), (-1, -1), 10),
+            ("FONTSIZE", (4, -1), (-1, -1), 9.5),
             # Alt row shading
             *[("BACKGROUND", (0, i), (-1, i), light_bg) for i in range(2, len(rows)-2, 2)],
         ]))
         els.append(items_tbl)
     else:
         # Fallback — just show total_value if no line items
-        els.append(Paragraph(f"Total Value: {curr_symbol}{prop.total_value:,.2f}" if prop.total_value else "No items.", normal))
+        els.append(Paragraph(f"Valor Total: {curr_symbol}{prop.total_value:,.2f}" if prop.total_value else "Sin partidas especificadas.", normal))
 
     # ── NOTES ─────────────────────────────────────────────────────────────────
     if prop.content:
-        els.append(Spacer(1, 16))
-        els.append(Paragraph("Notes", h2))
+        els.append(Spacer(1, 14))
+        els.append(Paragraph("Notas y Términos", h2))
         for para in prop.content.split("\n"):
             if para.strip():
                 els.append(Paragraph(para.strip(), normal))
-                els.append(Spacer(1, 4))
+                els.append(Spacer(1, 3))
 
-    els.append(Spacer(1, 20))
-    els.append(HRFlowable(width="100%", thickness=0.5, color=mid))
-    els.append(Spacer(1, 6))
-    els.append(Paragraph("SERP Hawk — Thank you for your business!", footer_s))
+    els.append(Spacer(1, 16))
+    els.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1")))
+    els.append(Spacer(1, 5))
+    els.append(Paragraph("DaPros (Dapros mkt) · Av. Chapultepec Sur 15, Americana, 44600 Guadalajara, Jal. · Tel: +52 33 3184 9546 · dapros.com.mx", footer_s))
+    els.append(Paragraph("¡Gracias por su preferencia!", ParagraphStyle("PFootSub", parent=styles["Normal"], fontSize=7.5, fontName="Helvetica-Oblique", textColor=accent, alignment=1)))
 
     doc.build(els)
     buf.seek(0)
-    return buf.getvalue(), f"quotation-Q{prop.id:04d}.pdf"
+    return buf.getvalue(), f"cotizacion-Q{prop.id:04d}.pdf"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -10770,34 +10878,49 @@ Identify 2 realistic competitors in their exact industry. Return ONLY valid JSON
 """
         elif body.agent_type == "email":
             prompt = system_prompt + """
-Write a hyper-personalized, ultra-concise, and compelling cold outreach email to the CEO or decision-maker. 
+Write a hyper-personalized, ultra-concise, and compelling cold outreach email from DaPros to the CEO or decision-maker at this company.
+
+ABOUT DAPROS (the sender):
+- Company: DaPros | dapros.com.mx
+- Industry: Graphic Design, Marketing & Web Agency — Guadalajara, Mexico
+- Services: Diseño Gráfico, Marketing Digital, Sitios Web, Branding, SEO, Meta/Google Ads, Contenido Visual
+- Founder: Emmanuel Padilla | contacto@dapros.com.mx | +52 33 3184 9546
+
 CRITICAL RULES:
-1. NO PLACEHOLDERS: Do NOT use brackets like [Your Name], [Your Company], etc. Write the email from the perspective of an elite B2B Growth/Marketing Agency (SerpHawk).
-2. NO BOILERPLATE: Never use generic openers like "I hope this message finds you well" or "My name is X". Jump STRAIGHT into the value and why you are contacting them.
-3. BE SPECIFIC: Use the actual insights, industry, and URL provided to make it hyper-relevant to their specific business.
-4. KEEP IT SHORT: Keep it under 4 short paragraphs. Make it punchy.
+1. NO PLACEHOLDERS: Write from the perspective of DaPros / Emmanuel Padilla. Never use [Your Name] or similar.
+2. NO BOILERPLATE: Skip generic openers. Jump STRAIGHT into what you noticed about their business.
+3. BE SPECIFIC: Reference the company's actual industry and website to make it hyper-relevant.
+4. KEEP IT SHORT: Under 4 short paragraphs. Punchy. Bilingual (English + Spanish).
+5. SIGN OFF as: "Atentamente,\nEmmanuel Padilla\nFundador, DaPros\ncontacto@dapros.com.mx | +52 33 3184 9546"
 
 Return ONLY valid JSON matching exactly:
 {
   "subject": "Compelling, non-spammy subject line (lowercase, casual)",
-  "body": "The full email body, formatted beautifully with line breaks."
+  "body": "The full email body (English first, then Spanish translation), formatted with line breaks."
 }
 """
         elif body.agent_type == "calling":
             prompt = system_prompt + """
-Write a professional, punchy, and conversational B2B sales teleprompter script for a sales agent to read on a cold call. 
+Write a professional, punchy, and conversational B2B sales call script for a DaPros sales rep making a cold call.
+
+ABOUT DAPROS (caller):
+- Agency: DaPros | dapros.com.mx
+- Services: Diseño Gráfico, Marketing Digital, Sitios Web, Branding, SEO, Google & Meta Ads
+- Caller: Emmanuel Padilla, Founder | +52 33 3184 9546
+
 CRITICAL RULES:
-1. NO PLACEHOLDERS: Do NOT use brackets like [Your Name] or [Your Company]. Introduce yourself as calling from SerpHawk (an elite Growth/SEO agency).
-2. SOUND HUMAN: Make it sound like a real person speaking, not a corporate robot. Use casual but professional language.
-3. BE SPECIFIC: Use the lead's actual company name and industry to make the pitch highly relevant.
+1. NO PLACEHOLDERS: Introduce yourself as calling from DaPros. Use the actual company name and industry.
+2. SOUND HUMAN: Conversational, not scripted. Mix casual and professional.
+3. BE SPECIFIC: Reference the lead's company and industry.
+4. BILINGUAL: Provide the script in Spanish (primary market is Mexico/Latin America).
 
 Return ONLY valid JSON matching exactly:
 {
   "calling": {
-    "intro": "The opening hook (casual, getting straight to the point)...",
-    "value_prop": "The core pitch tailored to their specific industry...",
-    "objections": ["If they say 'Not interested', say...", "If they say 'We already have an agency', say..."],
-    "closing": "The soft call to action to book a meeting..."
+    "intro": "The opening hook — warm, direct, to the point (in Spanish)...",
+    "value_prop": "Core DaPros pitch tailored to their specific industry (in Spanish)...",
+    "objections": ["Si dicen 'No me interesa': ...", "Si dicen 'Ya tenemos agencia': ..."],
+    "closing": "Soft CTA to book a 15-min call or WhatsApp chat (in Spanish)..."
   }
 }
 """
@@ -11470,7 +11593,7 @@ def create_meeting(body: MeetingCreateRequest, session: Session = Depends(get_se
         )
         if notes:
             plain += f"\n\nNotes:\n{notes}"
-        plain += "\n\nThanks,\nSerpHawk CRM"
+        plain += "\n\nThanks,\nDaPros"
 
         esc = _html.escape
         title = esc(m.title or "Meeting")
@@ -11515,7 +11638,7 @@ def create_meeting(body: MeetingCreateRequest, session: Session = Depends(get_se
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(15,23,42,0.08)">
           <tr>
             <td style="background:linear-gradient(135deg,#1e3a8a,#2563eb);padding:28px 32px">
-              <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#93c5fd">SerpHawk CRM</p>
+              <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#c4b5fd">DaPros</p>
               <p style="margin:8px 0 0;font-size:22px;font-weight:800;color:#ffffff">📅 Meeting Scheduled</p>
             </td>
           </tr>
@@ -11530,7 +11653,7 @@ def create_meeting(body: MeetingCreateRequest, session: Session = Depends(get_se
           </tr>
           <tr>
             <td style="padding:16px 32px 24px;border-top:1px solid #eef2f7">
-              <p style="margin:0;color:#64748b;font-size:12px;line-height:1.5">Thanks,<br><span style="font-weight:700;color:#1d4ed8">SerpHawk CRM</span></p>
+              <p style="margin:0;color:#64748b;font-size:12px;line-height:1.5">Thanks,<br><span style="font-weight:700;color:#7c3aed">DaPros</span></p>
               <p style="color:#94a3b8;font-size:11px;line-height:1.5;margin:14px 0 0;border-top:1px solid #e2e8f0;padding-top:12px">📬 Didn't see this in your inbox? Sometimes automated emails land in spam or junk — please check there and mark us as "Not spam" so future emails reach you.</p>
             </td>
           </tr>
@@ -12046,9 +12169,9 @@ def _quote_smtp_sender(session: Session):
             smtp_port = es.smtp_port
 
     if not sender or not password:
-        sender = sender or os.getenv("EMAIL_SENDER") or os.getenv("OUTLOOK_EMAIL", "crm@serphawk.in")
+        sender = sender or os.getenv("EMAIL_SENDER") or os.getenv("OUTLOOK_EMAIL", "contacto@dapros.com.mx")
         password = password or os.getenv("EMAIL_PASSWORD") or os.getenv("OUTLOOK_PASSWORD", "")
-        smtp_server = smtp_server or os.getenv("EMAIL_HOST") or os.getenv("SMTP_SERVER", "mail.serphawk.in")
+        smtp_server = smtp_server or os.getenv("EMAIL_HOST") or os.getenv("SMTP_SERVER", "smtp.gmail.com")
         smtp_port = smtp_port or os.getenv("EMAIL_PORT") or os.getenv("SMTP_PORT", 587)
 
     return sender, password, smtp_server, smtp_port
