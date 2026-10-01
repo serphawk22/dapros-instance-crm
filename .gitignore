@@ -40,9 +40,8 @@ DEBUG_SCRAPE_FLOW.txt
 last_scrape_debug.txt
 schema_inspect.txt
 health.json
-tmp_check_version.py
-test_*.py
-*.pyc
+*.log
 .myvenv/
 .schema_created
+.migration_done
 check_sqlite.py
