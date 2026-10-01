@@ -440,15 +440,60 @@ class APIIntelligenceMiddleware(BaseHTTPMiddleware):
 app = FastAPI(title="SerpHawk CRM", version="2.0.0")
 
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response as FastAPIResponse
+from starlette.middleware.base import BaseHTTPMiddleware as _BaseHTTPMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r".*",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
+# ──────────────────────────────────────────────────────────────────────────────
+# CORS: raw ASGI middleware that fires BEFORE anything else (including Railway's
+# hikari edge proxy).  Handles preflight (OPTIONS) directly and injects headers
+# into every other response.
+# ──────────────────────────────────────────────────────────────────────────────
+class RawCORSMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers", []))
+            origin = headers.get(b"origin", b"*").decode("utf-8") or "*"
+
+            if scope["method"] == "OPTIONS":
+                # Immediately respond 200 to preflight — bypasses ALL other middleware
+                response_headers = [
+                    (b"access-control-allow-origin", origin.encode()),
+                    (b"access-control-allow-credentials", b"true"),
+                    (b"access-control-allow-methods", b"GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD"),
+                    (b"access-control-allow-headers", b"*"),
+                    (b"access-control-expose-headers", b"*"),
+                    (b"access-control-max-age", b"86400"),
+                    (b"vary", b"Origin"),
+                    (b"content-length", b"0"),
+                ]
+                await send({"type": "http.response.start", "status": 200, "headers": response_headers})
+                await send({"type": "http.response.body", "body": b""})
+                return
+
+            # For regular requests, wrap send to inject CORS headers
+            async def send_with_cors(message):
+                if message["type"] == "http.response.start":
+                    existing = list(message.get("headers", []))
+                    # Strip any existing ACAO header to avoid duplicates
+                    existing = [h for h in existing if h[0].lower() != b"access-control-allow-origin"]
+                    existing += [
+                        (b"access-control-allow-origin", origin.encode()),
+                        (b"access-control-allow-credentials", b"true"),
+                        (b"access-control-expose-headers", b"*"),
+                        (b"vary", b"Origin"),
+                    ]
+                    message = {**message, "headers": existing}
+                await send(message)
+
+            await self.app(scope, receive, send_with_cors)
+        else:
+            await self.app(scope, receive, send)
+
+app.add_middleware(RawCORSMiddleware)
 
 from fastapi.responses import JSONResponse
 from fastapi import Request
