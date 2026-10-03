@@ -38,16 +38,13 @@ export default function LoginPage() {
           throw new Error("No email found in Google account. Please verify your email.");
         }
         
+        // Sync state via RoleContext by using the login function indirectly.
+        // Store the user and let RoleContext's useEffect handle the redirect.
         localStorage.setItem("crm_user", JSON.stringify(data.user));
-        
-        if (data.is_new_user) {
-          window.location.href = "/onboarding";
-        } else {
-          window.location.href = "/";
-        }
+        // Force a page reload so RoleContext re-reads localStorage and redirects cleanly.
+        window.location.href = data.is_new_user ? "/onboarding" : "/";
       } catch (err: any) {
         setError(err.message || "An error occurred with Google Login.");
-      } finally {
         setGoogleSubmitting(false);
       }
     },
@@ -65,17 +62,14 @@ export default function LoginPage() {
       const result = await login(email, password);
       
       if (result.success) {
-        if (result.is_new_user) {
-          window.location.href = "/onboarding";
-        } else {
-          window.location.href = "/";
-        }
+        // RoleContext's useEffect handles the redirect from /login → /
+        // when isAuthenticated becomes true. No manual navigation needed.
       } else {
-        setError(result.error || "Login failed");
+        setError(result.message || "Login failed");
+        setIsSubmitting(false);
       }
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred.");
-    } finally {
       setIsSubmitting(false);
     }
   };
