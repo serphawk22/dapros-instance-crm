@@ -214,7 +214,7 @@ export default function HomePage() {
   useEffect(() => {
     if (authLoading) return;
     if (!isAuthenticated) {
-      router.replace("/login");
+      window.location.href = "/landing/index.html";
       return;
     }
     if (role === "Employee") {

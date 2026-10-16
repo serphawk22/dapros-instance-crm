@@ -101,8 +101,8 @@ if (typeof window !== 'undefined' && !(window as any)._fetchPatched) {
     if (response.status === 401 && isInternalApi && typeof resource === 'string' && !resource.endsWith('/login')) {
       if (typeof window !== 'undefined') {
         localStorage.removeItem('crm_user');
-        if (window.location.pathname !== '/login') {
-            window.location.href = '/login';
+        if (window.location.pathname !== '/landing/index.html') {
+            window.location.href = '/landing/index.html';
         }
       }
     }
@@ -174,7 +174,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setIsAuthenticated(false);
     localStorage.removeItem('crm_user');
-    router.replace('/login');
+    window.location.href = '/landing/index.html';
   };
 
   return (

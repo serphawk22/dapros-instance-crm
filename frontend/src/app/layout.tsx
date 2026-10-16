@@ -57,11 +57,11 @@ function ClientLayout({ children }: { children: React.ReactNode }) {
 const inter = Inter({ subsets: ["latin"], preload: false });
 
 function AppContent({ children }: { children: React.ReactNode }) {
-  const { role, loading } = useRole();
+  const { role, loading, isAuthenticated } = useRole();
   const pathname = usePathname();
-  const isClient = role === "Client";
-  const isDeveloper = role === "ProjectMember";
-  const isAdminOrEmployee = role === "Admin" || role === "Employee" || role === "Intern" || role === "SalesManager" || role === "Demo";
+  const isClient = isAuthenticated && role === "Client";
+  const isDeveloper = isAuthenticated && role === "ProjectMember";
+  const isAdminOrEmployee = isAuthenticated && (role === "Admin" || role === "Employee" || role === "Intern" || role === "SalesManager" || role === "Demo");
   const showChatbot = !!role && role !== "Client"; // Show for ALL roles except unauthenticated Client
 
   useEffect(() => {
@@ -125,7 +125,7 @@ function AppContent({ children }: { children: React.ReactNode }) {
   }
 
   // ── Supplier layout ──
-  if (role === "Supplier") {
+  if (isAuthenticated && role === "Supplier") {
     return (
       <div className="min-h-screen bg-[#f8fafc] dark:bg-black">
         <nav className="bg-white dark:bg-black border-b border-slate-200 dark:border-slate-800 px-6 py-3 flex items-center justify-between">
