@@ -636,7 +636,7 @@ export default function CallsPage() {
               ) : (
                 <>
                   {aiCallLogs.filter(log => log.call_status === "pending").map((log) => (
-                    <motion.div key={`pending-${log.id}`} variants={itemVariants}
+                    <motion.div key={`pending-${log.id}`} variants={itemVariants} initial="hidden" animate="show"
                       className="bg-white dark:bg-zinc-900/60 backdrop-blur-2xl border border-slate-100 dark:border-zinc-800 rounded-3xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] p-6 relative overflow-hidden transition-all">
                       <div className="flex items-start gap-4">
                         <div className="mt-3.5 w-4 h-4 rounded" /> 
@@ -656,8 +656,10 @@ export default function CallsPage() {
                       </div>
                     </motion.div>
                   ))}
+                  {/* initial/animate on each card: the cards mount after the tab container has already
+                      animated to "show" (calls load async), and an inherited variant would leave them at opacity 0. */}
                   {calls.map((call) => (
-                    <motion.div key={call.id} variants={itemVariants}
+                    <motion.div key={call.id} variants={itemVariants} initial="hidden" animate="show"
                     className={cn("bg-white dark:bg-zinc-900/60 backdrop-blur-2xl border rounded-3xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] p-6 transition-all",
                       call.followup_needed ? "border-red-200 dark:border-red-900/50" : "border-slate-100 dark:border-zinc-800",
                       selectedCallIds.has(call.id) && "ring-2 ring-amber-400 border-amber-400")}>

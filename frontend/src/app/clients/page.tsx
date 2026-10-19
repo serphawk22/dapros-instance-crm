@@ -267,7 +267,7 @@ export default function ClientsPage() {
 
   const fetchActivities = async () => {
     try {
-      const url = new URL(`${API_BASE_URL}/activities`);
+      const url = new URL(`${API_BASE_URL}/activities`, window.location.origin);
       if (role === 'SalesManager' && user?.id) {
         url.searchParams.append('user_id', String(user.id));
       }
@@ -313,7 +313,7 @@ export default function ClientsPage() {
     setLoading(true);
     const start = performance.now();
     try {
-      const url = new URL(`${API_BASE_URL}/clients`);
+      const url = new URL(`${API_BASE_URL}/clients`, window.location.origin);
       if (filter !== 'All') url.searchParams.append('status', filter);
       if (search.trim()) url.searchParams.append('query', search.trim());
       url.searchParams.append('page', String(page));
@@ -730,7 +730,7 @@ export default function ClientsPage() {
             </div>
           ) : viewMode === 'map' ? (
             <div className="p-6 h-[700px]">
-              <ClientMapView clients={filteredClients} />
+              <ClientMapView clients={filteredClients} statuses={statuses} />
             </div>
           ) : (
             <table className="w-full text-left border-collapse">
@@ -779,7 +779,7 @@ export default function ClientsPage() {
                         </td>
                         <td className="px-6 py-4">
                           <span className="text-[13px] text-slate-600 dark:text-slate-300">
-                            {client.website || client.websiteUrl ? (client.website || client.websiteUrl).replace(/^https?:\/\//, '') : '—'}
+                            {client.website || client.websiteUrl ? (client.website || client.websiteUrl || '').replace(/^https?:\/\//, '') : '—'}
                           </span>
                         </td>
                         <td className="px-6 py-4">
