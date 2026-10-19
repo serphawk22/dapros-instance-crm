@@ -12,6 +12,7 @@ interface User {
   name: string;
   role: Role;
   client_id?: number;
+  tenant_id?: number | null;
 }
 
 interface RoleContextType {
@@ -19,7 +20,7 @@ interface RoleContextType {
   email: string;
   isAuthenticated: boolean;
   user: User | null;
-  login: (email: string, pass: string) => Promise<{ success: boolean; message?: string }>;
+  login: (email: string, pass: string) => Promise<{ success: boolean; message?: string; is_new_user?: boolean }>;
   logout: () => void;
   loading: boolean;
 }
@@ -33,8 +34,12 @@ if (typeof window !== 'undefined' && !(window as any)._fetchPatched) {
     let [resource, config] = args;
     const saved = localStorage.getItem('crm_user');
     
-    // Only inject tenant_id for internal API calls, not external ones like docs.google.com
-    const isInternalApi = typeof resource === 'string' && (resource.startsWith(API_BASE_URL) || resource.startsWith('/'));
+    // Only inject tenant_id for internal API calls, not external ones like docs.google.com. Behind the
+    // same-origin proxy (API_BASE_URL = "/api/backend") a URL built with new URL(..., location.origin)
+    // is absolute on this origin, so that counts as internal too.
+    const isInternalApi = typeof resource === 'string' && (
+      resource.startsWith(API_BASE_URL) || resource.startsWith('/') || resource.startsWith(window.location.origin + '/')
+    );
 
     if (saved && isInternalApi) {
       try {

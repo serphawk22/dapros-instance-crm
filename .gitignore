@@ -45,3 +45,5 @@ health.json
 .schema_created
 .migration_done
 check_sqlite.py
+.local/
+!tests/test_*.py

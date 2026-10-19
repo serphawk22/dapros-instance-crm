@@ -118,7 +118,7 @@ export default function LeadsPage() {
   const fetchLeads = async () => {
     setLoading(true);
     try {
-      const url = new URL(`${API_BASE_URL}/leads`);
+      const url = new URL(`${API_BASE_URL}/leads`, window.location.origin);
       if ((role === 'SalesManager' || role === 'Employee') && user?.id) {
         url.searchParams.append('owner_id', String(user.id));
       }

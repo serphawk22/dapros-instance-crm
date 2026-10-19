@@ -25,6 +25,18 @@ function hasConfirmedHeader(config?: RequestInit): boolean {
   return false;
 }
 
+/** Backend path of an API URL ("/send-manual"), however it was written: relative to the same-origin
+ *  proxy ("/api/backend/send-manual"), absolute on this page's origin (`new URL(..., location.origin)`),
+ *  or absolute on the backend (API_BASE_URL = "http://127.0.0.1:8000" in local runs). */
+export function apiPath(url: string): string {
+  let u = url;
+  if (typeof window !== "undefined" && u.startsWith(window.location.origin + "/")) {
+    u = u.slice(window.location.origin.length);
+  }
+  if (API_BASE_URL && u.startsWith(API_BASE_URL)) u = u.slice(API_BASE_URL.length);
+  return u.split("#")[0].split("?")[0] || "/";
+}
+
 export function emailTriggerInfo(
   resource: string | Request,
   config?: RequestInit
@@ -33,8 +45,7 @@ export function emailTriggerInfo(
   let url = "";
   if (typeof resource === "string") url = resource;
   else if (resource instanceof Request) url = resource.url;
-  url = url.replace(API_BASE_URL, "");
-  const path = url.split("?")[0];
+  const path = apiPath(url);
   const method = (config?.method || "GET").toUpperCase();
   const body = parseBody(config);
 
@@ -104,6 +115,34 @@ export function emailTriggerInfo(
   } else if (method === "POST" && path === "/email-otp/send") {
     to = nim(body.email);
     note = "Send a one-time passcode to this email.";
+  } else if (method === "POST" && /^\/inbox\/messages\/(in|out)-\d+\/reply$/.test(path)) {
+    to = nim(body.to);
+    subject = nim(body.subject);
+    note = body.to ? "Send this reply from the Inbox." : "Send this reply to the sender from the Inbox.";
+  } else if (method === "POST" && /^\/(leads|clients)\/\d+\/email-composer\/send$/.test(path)) {
+    to = [nim(body.to), nim(body.cc)].filter(Boolean) as string[];
+    subject = nim(body.subject);
+    note = `Send this email to the ${path.startsWith("/leads") ? "lead" : "client"}.`;
+  } else if (method === "POST" && path === "/email-campaigns") {
+    const col = body.mapping?.email;
+    const seen = new Set<string>();
+    const emails: string[] = [];
+    for (const row of Array.isArray(body.rows) ? body.rows : []) {
+      const e = col ? String(row?.[col] ?? "").trim() : "";
+      if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e) && !seen.has(e.toLowerCase())) {
+        seen.add(e.toLowerCase());
+        emails.push(e);
+      }
+    }
+    to = emails.length > 5 ? [...emails.slice(0, 5), `…and ${emails.length - 5} more`] : emails;
+    subject = nim(body.subject);
+    note = `Send ${emails.length} personalized email${emails.length === 1 ? "" : "s"} from the uploaded file (placeholders are filled in for each recipient).`;
+  } else if (method === "POST" && /^\/email-campaigns\/\d+\/retry$/.test(path)) {
+    note = "Re-send the failed / unsent emails of this campaign.";
+  } else if (method === "POST" && /^\/followups\/\d+\/send-email$/.test(path)) {
+    to = nim(body.to);
+    subject = nim(body.subject);
+    note = "Send this follow-up email to the contact.";
   } else {
     return null;
   }
