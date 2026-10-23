@@ -185,6 +185,7 @@ from database import (
     engine,
     InventoryItem,
     InventorySupplier,
+    StockMovement,
     RFQRequest,
     RFQResponse,
     APIKey,
@@ -17290,4 +17291,111 @@ def get_lead_sent_emails(lead_id: int, session: Session = Depends(get_session)):
                 "received_at": r.received_at.isoformat() if r.received_at else None,
             })
     return {"emails": [{**e.dict(), "replies": replies_by_email.get(e.id, [])} for e in emails]}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Inventory Stock Movements & Low Stock
+# ─────────────────────────────────────────────────────────────────────────────
+
+class StockMovementRequest(BaseModel):
+    change: Optional[float] = None
+    movement_type: Optional[str] = None  # "in" | "out" | "adjust"
+    quantity: Optional[float] = None
+    reason: Optional[str] = "Adjustment"
+    reference: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@app.get("/inventory-stock/low")
+def low_stock(session: Session = Depends(get_session)):
+    items = session.exec(select(InventoryItem)).all()
+    low = [i for i in items if (i.min_stock or 0) > 0 and (i.current_stock or 0) <= (i.min_stock or 0)]
+    return {
+        "items": [
+            {
+                "id": i.id,
+                "code": i.code,
+                "name": i.name,
+                "current_stock": i.current_stock,
+                "min_stock": i.min_stock,
+                "unit": i.unit,
+            }
+            for i in low
+        ],
+        "count": len(low),
+    }
+
+
+@app.get("/inventory-stock/{item_id}/movements")
+def list_movements(item_id: int, session: Session = Depends(get_session)):
+    item = session.get(InventoryItem, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    rows = session.exec(
+        select(StockMovement)
+        .where(StockMovement.item_id == item_id)
+        .order_by(StockMovement.created_at.desc())
+    ).all()
+    author_ids = list({r.author_id for r in rows if r.author_id})
+    authors = session.exec(select(User).where(User.id.in_(author_ids))).all() if author_ids else []
+    authors_map = {u.id: u.name for u in authors}
+    return {
+        "current_stock": item.current_stock,
+        "movements": [
+            {
+                "id": r.id,
+                "change": r.change,
+                "movement_type": "in" if (r.change or 0) >= 0 else "out",
+                "quantity": abs(r.change or 0),
+                "reason": r.reason,
+                "reference": r.reference,
+                "author_name": authors_map.get(r.author_id) or "System",
+                "balance_after": r.balance_after,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.post("/inventory-stock/{item_id}/movements")
+def add_movement(item_id: int, body: StockMovementRequest, session: Session = Depends(get_session)):
+    item = session.get(InventoryItem, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if body.change is not None:
+        delta = float(body.change)
+    else:
+        qty = float(body.quantity or 0)
+        mtype = (body.movement_type or "in").lower()
+        if mtype == "out":
+            delta = -abs(qty)
+        elif mtype == "adjust":
+            delta = qty - float(item.current_stock or 0)
+        else:
+            delta = abs(qty)
+
+    new_bal = (item.current_stock or 0) + delta
+    if new_bal < 0:
+        raise HTTPException(status_code=400, detail=f"Insufficient stock (available {item.current_stock or 0})")
+
+    caller_id = current_salesperson_id.get()
+    item.current_stock = new_bal
+    item.updated_at = datetime.now(timezone.utc)
+    mv = StockMovement(
+        item_id=item_id,
+        change=delta,
+        reason=body.reason or "Adjustment",
+        reference=body.reference or body.notes,
+        balance_after=new_bal,
+        author_id=caller_id,
+        tenant_id=current_tenant_id.get() or item.tenant_id,
+    )
+    session.add(item)
+    session.add(mv)
+    session.commit()
+    low = (item.min_stock or 0) > 0 and new_bal <= (item.min_stock or 0)
+    return {"ok": True, "current_stock": new_bal, "low_stock": low}
+
 

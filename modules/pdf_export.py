@@ -13,7 +13,7 @@ from reportlab.platypus import (
 
 
 def _brand_header(doc, brand_title):
-    """Return flowable header block with logo + title (best-effort)."""
+    """Return flowable header block with logo + company name (DaPros) + title."""
     from reportlab.platypus import Table as T
     logo_path = os.path.join("static", "dapros_logo.png")
     if not os.path.exists(logo_path):
@@ -25,26 +25,34 @@ def _brand_header(doc, brand_title):
     logo_cell = None
     if os.path.exists(logo_path):
         try:
-            logo_cell = Image(logo_path, width=22 * mm, height=14 * mm, hAlign="LEFT")
+            logo_cell = Image(logo_path, width=24 * mm, height=14 * mm, hAlign="LEFT")
         except Exception:
             logo_cell = None
 
     cell = []
-    title = Paragraph(f"<b>{brand_title}</b>", ParagraphStyle(
-        "brandTitle", fontName="Helvetica-Bold", fontSize=18, leading=22,
-        textColor=colors.HexColor("#1e293b")
+    company = Paragraph("<b>DaPros</b>", ParagraphStyle(
+        "brandCompany", fontName="Helvetica-Bold", fontSize=18, leading=22,
+        textColor=colors.HexColor("#0f172a")
     ))
-    sub = Paragraph("DaPros (Dapros mkt) · CRM & Facturación · dapros.com.mx", ParagraphStyle(
-        "brandSub", fontName="Helvetica", fontSize=9, leading=12,
-        textColor=colors.HexColor("#64748b")
+    cell.append(company)
+
+    if brand_title and str(brand_title).strip().lower() != "dapros":
+        title_para = Paragraph(str(brand_title), ParagraphStyle(
+            "brandDocTitle", fontName="Helvetica-Bold", fontSize=12, leading=15,
+            textColor=colors.HexColor("#2563eb"), spaceBefore=2
+        ))
+        cell.append(title_para)
+
+    sub = Paragraph("DaPros CRM · Av. Chapultepec Sur 15, Guadalajara, Jal. · Tel: +52 33 3184 9546 · dapros.com.mx", ParagraphStyle(
+        "brandSub", fontName="Helvetica", fontSize=8.5, leading=11,
+        textColor=colors.HexColor("#64748b"), spaceBefore=1.5
     ))
-    cell.append(title)
     cell.append(sub)
 
     data_row = []
     if logo_cell is not None:
         data_row.append([logo_cell, cell])
-        widths = [26 * mm, None]
+        widths = [28 * mm, None]
     else:
         data_row.append([cell])
         widths = [None]
@@ -71,7 +79,8 @@ def _footer(canvas, doc):
     canvas.setFont("Helvetica", 8)
     canvas.setFillColor(colors.HexColor("#94a3b8"))
     canvas.drawString(10 * mm, 8 * mm, "DaPros CRM · Av. Chapultepec Sur 15, Guadalajara, Jal. · Tel: +52 33 3184 9546 · dapros.com.mx")
-    canvas.drawRightString(A4[0] - 10 * mm, 8 * mm, f"Página {doc.page}")
+    page_w = canvas._pagesize[0] if hasattr(canvas, "_pagesize") else A4[0]
+    canvas.drawRightString(page_w - 10 * mm, 8 * mm, f"Página {doc.page}")
     canvas.restoreState()
 
 
@@ -81,6 +90,7 @@ def _build_pdf(title, headers, rows, widths):
         buf, pagesize=landscape(A4),
         leftMargin=12 * mm, rightMargin=12 * mm,
         topMargin=12 * mm, bottomMargin=14 * mm,
+        title=f"DaPros — {title}", author="DaPros",
     )
     styles = getSampleStyleSheet()
 
@@ -279,7 +289,8 @@ def single_inventory_pdf(it, suppliers=None):
 
     buf = _io.BytesIO()
     doc = _SDT(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm,
-               topMargin=15 * mm, bottomMargin=15 * mm)
+               topMargin=15 * mm, bottomMargin=15 * mm,
+               title="DaPros — Inventory Item", author="DaPros")
 
     story = _brand_header(doc, "Inventory Item")
     story += _item_card_story(it, doc)
@@ -710,7 +721,8 @@ def single_purchase_order_pdf(order):
     """Generate a single purchase order PDF card."""
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm,
-                            topMargin=15 * mm, bottomMargin=15 * mm)
+                            topMargin=15 * mm, bottomMargin=15 * mm,
+                            title="DaPros — Purchase Order", author="DaPros")
 
     created = ""
     if order.get("created_at"):
@@ -950,7 +962,7 @@ def _serphawk_header(title_text, meta_lines=None, subtitle=None):
     """
     from reportlab.platypus import HRFlowable as _HR, Image as _Img
 
-    brand_name = "DaPros" if not title_text or title_text in ("SERPHAWK", "SERP Hawk", "DaPros") else title_text
+    brand_name = "DaPros" if not title_text or str(title_text).strip().upper() in ("SERPHAWK", "SERP HAWK", "DAPROS") else title_text
 
     logo_path = os.path.join("static", "dapros_logo.png")
     if not os.path.exists(logo_path):
@@ -970,7 +982,7 @@ def _serphawk_header(title_text, meta_lines=None, subtitle=None):
         left_parts.append(logo_cell)
         left_parts.append(Spacer(1, 2 * mm))
 
-    left_parts.append(Paragraph(f"<b>{brand_name}</b> <font size=8.5 color='#64748b'>(Dapros mkt)</font>", ParagraphStyle(
+    left_parts.append(Paragraph(f"<b>{brand_name}</b>", ParagraphStyle(
         "shBrand", fontName="Helvetica-Bold", fontSize=15, leading=18,
         textColor=_RECEIPT_INK, wordWrap="CJK")))
 
@@ -1376,7 +1388,7 @@ def quote_pdf(data):
         left_parts.append(logo_cell)
         left_parts.append(Spacer(1, 2 * mm))
 
-    left_parts.append(Paragraph("<b>DaPros</b> <font size=9 color='#64748b'>(Dapros mkt)</font>", ParagraphStyle(
+    left_parts.append(Paragraph("<b>DaPros</b>", ParagraphStyle(
         "qBrand", fontName="Helvetica-Bold", fontSize=16, leading=19,
         textColor=_RECEIPT_INK, wordWrap="CJK")))
     left_parts.append(Paragraph(subtitle, ParagraphStyle(
