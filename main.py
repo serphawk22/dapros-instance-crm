@@ -19616,6 +19616,10 @@ def convert_proposal_to_invoice(proposal_id: int, session: Session = Depends(get
     return {"invoice": _invoice_dict(inv, session), "message": "Invoice created from proposal"}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Inventory Stock Movements & Low Stock
+# ─────────────────────────────────────────────────────────────────────────────
+
 class StockMovementRequest(BaseModel):
     change: Optional[float] = None
     movement_type: Optional[str] = None  # "in" | "out" | "adjust"
@@ -20029,4 +20033,3 @@ def management_dashboard(session: Session = Depends(get_session)):
         "salesperson_performance": salesperson_perf,
         "monthly_leads": monthly,
     }
-
