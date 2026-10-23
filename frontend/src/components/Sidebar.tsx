@@ -111,11 +111,9 @@ const defaultSidebarSections = [
     heading: "INVENTORY",
     items: [
       { id: "item-inventory", name: "Inventory", icon: "Package", href: "/inventory", roles: ["Admin", "SalesManager", "Demo"] },
-      { id: "item-products", name: "Products Catalog", icon: "Package", href: "/products", roles: ["Admin", "SalesManager", "Demo"] },
       { id: "item-orders", name: "Orders", icon: "ShoppingCart", href: "/orders", roles: ["Admin", "SalesManager", "Demo"] },
-      { id: "item-billing", name: "Billing", icon: "FileText", href: "/billing", roles: ["Admin", "SalesManager", "Demo"] },
-      { id: "item-proposals", name: "Proposals", icon: "FileEdit", href: "/proposals", roles: ["Admin", "SalesManager", "Demo"] },
-      { id: "item-marketplace", name: "Marketplace", icon: "ShoppingBag", href: "/admin/marketplace", roles: ["Admin", "SalesManager", "Demo"] },
+      { id: "item-billing", name: "Invoices", icon: "FileText", href: "/billing", roles: ["Admin", "SalesManager", "Demo"] },
+      { id: "item-proposals", name: "Proposals & Quotes", icon: "FileEdit", href: "/proposals", roles: ["Admin", "SalesManager", "Demo", "Client"] },
     ],
   },
   {
@@ -447,7 +445,9 @@ export function Sidebar({ role }: SidebarProps) {
                 i.id !== "item-scmhub-cases" &&
                 i.id !== "item-import" &&
                 i.id !== "item-api-intelligence" &&
-                i.id !== "item-demo-accounts"),
+                i.id !== "item-demo-accounts" &&
+                i.id !== "item-products" &&
+                i.id !== "item-marketplace"),
             });
             const mergedSectionsClean = mergedSections.map(stripDisabled).filter((s: any) => (s.items || []).length > 0);
             

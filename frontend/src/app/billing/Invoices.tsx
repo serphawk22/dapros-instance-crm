@@ -1,11 +1,12 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, forwardRef, useImperativeHandle } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FileText, Plus, X, Search, Loader2, Trash2, Building2,
   Download, Eye, CheckCircle
 } from "lucide-react";
 import { API_BASE_URL } from "@/config";
+import { useRole } from "@/context/RoleContext";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface InvoiceLineItem {
@@ -47,12 +48,27 @@ const STATUS_COLORS: Record<string, string> = {
   Cancelled: "bg-slate-100 text-slate-400",
 };
 
-function currSymbol(c: string) { return c === "INR" ? "₹" : "$"; }
+function currSymbol(c: string) {
+  if (c === "INR") return "₹";
+  if (c === "EUR") return "€";
+  if (c === "GBP") return "£";
+  return "₹";
+}
 function fmtMoney(v: number, c: string) {
   return `${currSymbol(c)}${v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-export default function Invoices({ embedded = false }: { embedded?: boolean }) {
+export interface InvoicesHandle {
+  openCreate: () => void;
+}
+
+const Invoices = forwardRef<InvoicesHandle, { embedded?: boolean }>(function Invoices(
+  { embedded = false },
+  ref
+) {
+  const { role, user } = useRole();
+  const isAdmin = role === "Admin" || role === "SuperAdmin";
+
   // List state
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -74,7 +90,7 @@ export default function Invoices({ embedded = false }: { embedded?: boolean }) {
     client_id: "" as string | number,
     amount: "",
     tax: "",
-    currency: "MXN",
+    currency: "INR",
     due_date: "",
     notes: "",
   });
@@ -88,14 +104,17 @@ export default function Invoices({ embedded = false }: { embedded?: boolean }) {
   // ── Data loading ─────────────────────────────────────────────────────────
   const loadInvoices = () => {
     setLoading(true);
-    fetch(`${API_BASE_URL}/invoices`)
+    const url = (!isAdmin && user?.id) ? `${API_BASE_URL}/invoices?user_id=${user.id}` : `${API_BASE_URL}/invoices`;
+    fetch(url)
       .then(r => r.json())
       .then(d => setInvoices(Array.isArray(d.invoices) ? d.invoices : []))
       .catch(console.error)
       .finally(() => setLoading(false));
   };
 
-  useEffect(loadInvoices, []);
+  useEffect(() => {
+    loadInvoices();
+  }, [user?.id, role]);
 
   const filtered = invoices.filter(inv => {
     if (statusFilter !== "All" && inv.status !== statusFilter) return false;
@@ -154,14 +173,17 @@ export default function Invoices({ embedded = false }: { embedded?: boolean }) {
 
   // ── Create ───────────────────────────────────────────────────────────────
   function openCreate() {
-    setForm({ client_id: "", amount: "", tax: "", currency: "MXN", due_date: "", notes: "" });
+    setForm({ client_id: "", amount: "", tax: "", currency: "INR", due_date: "", notes: "" });
     setLineItems([{ description: "", amount: 0, provider: "Internal" }]);
     setError(null);
-    fetch(`${API_BASE_URL}/clients`).then(r => r.json()).then(d => {
+    const clientsUrl = (!isAdmin && user?.id) ? `${API_BASE_URL}/clients?assigned_employee_id=${user.id}` : `${API_BASE_URL}/clients`;
+    fetch(clientsUrl).then(r => r.json()).then(d => {
       setClients(Array.isArray(d.clients) ? d.clients : []);
     }).catch(() => {});
     setShowCreate(true);
   }
+
+  useImperativeHandle(ref, () => ({ openCreate }));
 
   function addLineItem() {
     setLineItems(prev => [...prev, { description: "", amount: 0, provider: "Internal" }]);
@@ -246,7 +268,7 @@ export default function Invoices({ embedded = false }: { embedded?: boolean }) {
           { label: "Total Invoices", value: invoices.length, c: "text-blue-600" },
           { label: "Pending", value: invoices.filter(i => ["Draft", "Sent"].includes(i.status)).length, c: "text-amber-600" },
           { label: "Paid", value: invoices.filter(i => i.status === "Paid").length, c: "text-emerald-600" },
-          { label: "Total Value", value: `$${filtered.reduce((s, i) => s + (i.total || 0), 0).toFixed(0)}`, c: "text-indigo-600" },
+          { label: "Total Value", value: `₹${filtered.reduce((s, i) => s + (i.total || 0), 0).toFixed(0)}`, c: "text-indigo-600" },
         ].map(s => (
           <div key={s.label} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-2xl p-4 shadow-sm">
             <p className={`text-2xl font-black ${s.c}`}>{loading ? "—" : s.value}</p>
@@ -367,9 +389,10 @@ export default function Invoices({ embedded = false }: { embedded?: boolean }) {
                     <label className="text-xs font-semibold text-slate-500 mb-1 block">Currency</label>
                     <select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}
                       className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm">
-                      <option value="MXN">MXN ($)</option>
-                      <option value="USD">USD ($)</option>
+                                            <option value="EUR">EUR (€)</option>
+                      <option value="GBP">GBP (£)</option>
                       <option value="INR">INR (₹)</option>
+                      <option value="MXN">MXN (₹)</option>
                     </select>
                   </div>
                   <div>
@@ -483,43 +506,6 @@ export default function Invoices({ embedded = false }: { embedded?: boolean }) {
               </div>
 
               <div className="flex-1 overflow-y-auto p-6 space-y-5">
-                {/* DaPros Issuer Card */}
-                <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50/50 dark:from-emerald-950/20 dark:to-teal-950/10 border border-emerald-200/80 dark:border-emerald-800/40">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <img src="/dapros_logo.png" alt="DaPros" className="h-10 w-auto object-contain rounded-lg shadow-sm bg-white p-1" />
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-extrabold text-slate-900 dark:text-zinc-100 text-sm">DaPros</span>
-                          <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-100/80 dark:bg-emerald-900/40 px-2 py-0.5 rounded-full">Dapros mkt</span>
-                        </div>
-                        <p className="text-xs text-slate-600 dark:text-zinc-300 font-medium mt-0.5">Diseño Web · Marketing · Facturación Comercial</p>
-                      </div>
-                    </div>
-                    <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-white/80 dark:bg-zinc-800/80 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800/50 shadow-sm shrink-0">
-                      dapros.com.mx
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 pt-3 border-t border-emerald-200/60 dark:border-emerald-800/30 text-xs text-slate-600 dark:text-zinc-400">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-slate-700 dark:text-zinc-300">Contacto:</span>
-                      <span>Emmanuel Padilla, Founder</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-slate-700 dark:text-zinc-300">Tel:</span>
-                      <a href="tel:+523331849546" className="text-emerald-600 dark:text-emerald-400 hover:underline">+52 33 3184 9546</a>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-slate-700 dark:text-zinc-300">Email:</span>
-                      <a href="mailto:contacto@dapros.com.mx" className="text-emerald-600 dark:text-emerald-400 hover:underline">contacto@dapros.com.mx</a>
-                    </div>
-                    <div className="flex items-center gap-1.5 truncate">
-                      <span className="font-semibold text-slate-700 dark:text-zinc-300">Ubicación:</span>
-                      <span className="truncate" title="Av. Chapultepec Sur 15, Americana, 44600 Guadalajara, Jal.">Av. Chapultepec Sur 15, Guadalajara</span>
-                    </div>
-                  </div>
-                </div>
-
                 {/* Summary */}
                 <div className="grid grid-cols-3 gap-4">
                   <div className="bg-slate-50 dark:bg-zinc-800/50 rounded-xl p-3">
@@ -571,4 +557,6 @@ export default function Invoices({ embedded = false }: { embedded?: boolean }) {
       </AnimatePresence>
     </div>
   );
-}
+});
+
+export default Invoices;

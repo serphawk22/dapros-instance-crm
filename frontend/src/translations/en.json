@@ -363,7 +363,7 @@
     "inventory": "Inventory",
     "catalog": "Catalog",
     "orders": "Orders",
-    "billing": "Billing",
+    "billing": "Invoices",
     "proposals": "Proposals",
     "marketplace": "Marketplace",
     "cases": "Cases",

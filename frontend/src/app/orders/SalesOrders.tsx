@@ -5,12 +5,17 @@ import { ShoppingCart, Plus, X, Search, Loader2, Trash2, Building2, Download, Ma
 import { ExportActions } from "@/components/ExportActions";
 import { API_BASE_URL } from "@/config";
 
+import { useRole } from "@/context/RoleContext";
+
 interface SalesOrder { id: number; order_number?: string; status: string; grand_total: number; currency: string; client_name?: string; delivery_date?: string; created_at: string; recipient_email?: string; recipient_name?: string; }
 interface Lead { id: number; company_name: string; email?: string; }
 const STATUSES = ["Draft", "Sent", "Received", "Cancelled"];
 const STATUS_COLORS: Record<string, string> = { Draft: "bg-slate-500/10 text-slate-500", Sent: "bg-blue-500/10 text-blue-600", Received: "bg-emerald-500/10 text-emerald-600", Cancelled: "bg-red-500/10 text-red-500" };
 
 export default function SalesOrdersPage() {
+  const { role, user } = useRole();
+  const isAdmin = role === "Admin" || role === "SuperAdmin";
+
   const [orders, setOrders] = useState<SalesOrder[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
@@ -18,7 +23,7 @@ export default function SalesOrdersPage() {
   const [statusFilter, setStatusFilter] = useState("All");
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ linked_to: "lead" as "lead" | "client", lead_id: "" as string | number, client_id: "" as string | number, status: "Draft", grand_total: "", currency: "USD", delivery_date: "", notes: "" });
+  const [form, setForm] = useState({ linked_to: "lead" as "lead" | "client", lead_id: "" as string | number, client_id: "" as string | number, status: "Draft", grand_total: "", currency: "INR", delivery_date: "", notes: "" });
   const [clients, setClients] = useState<any[]>([]);
   const [emailModal, setEmailModal] = useState<{ orderId: number; orderNumber: string } | null>(null);
   const [emailPrompt, setEmailPrompt] = useState("");
@@ -32,17 +37,21 @@ export default function SalesOrdersPage() {
 
   const load = () => { 
     setLoading(true); 
+    const ordersUrl = (!isAdmin && user?.id) ? `${API_BASE_URL}/sales-orders?user_id=${user.id}` : `${API_BASE_URL}/sales-orders`;
+    const leadsUrl = (!isAdmin && user?.id) ? `${API_BASE_URL}/leads?owner_id=${user.id}` : `${API_BASE_URL}/leads`;
+    const clientsUrl = (!isAdmin && user?.id) ? `${API_BASE_URL}/clients?assigned_employee_id=${user.id}&per_page=1000` : `${API_BASE_URL}/clients?per_page=1000`;
+
     Promise.all([
-      fetch(`${API_BASE_URL}/sales-orders`).then(r => r.json()),
-      fetch(`${API_BASE_URL}/leads`).then(r => r.json()),
-      fetch(`${API_BASE_URL}/clients?per_page=1000`).then(r => r.json()),
+      fetch(ordersUrl).then(r => r.json()),
+      fetch(leadsUrl).then(r => r.json()),
+      fetch(clientsUrl).then(r => r.json()),
     ]).then(([od, ld, cd]) => {
       setOrders(Array.isArray(od.orders) ? od.orders : []);
       setLeads(Array.isArray(ld.leads) ? ld.leads : []);
       setClients(Array.isArray(cd.clients) ? cd.clients : []);
     }).finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(load, [user?.id, role]);
 
   const filtered = useMemo(() => orders.filter(o => {
     const s = search.toLowerCase();
@@ -55,7 +64,7 @@ export default function SalesOrdersPage() {
     if (form.linked_to === "client" && !form.client_id) { alert("Please select a client first"); return; }
     setSaving(true);
     try {
-      const payload = {
+      const payload: any = {
         status: form.status,
         grand_total: parseFloat(form.grand_total as string) || 0,
         currency: form.currency,
@@ -63,6 +72,7 @@ export default function SalesOrdersPage() {
         notes: form.notes || null,
         lead_id: form.linked_to === "lead" ? Number(form.lead_id) : null,
         client_id: form.linked_to === "client" ? Number(form.client_id) : null,
+        owner_id: user?.id || null,
       };
       const res = await fetch(`${API_BASE_URL}/sales-orders`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!res.ok) {
@@ -167,7 +177,7 @@ export default function SalesOrdersPage() {
           { label: "Total Orders", value: orders.length, c: "text-blue-500" },
           { label: "Draft", value: orders.filter(o => o.status === "Draft").length, c: "text-slate-500" },
           { label: "Sent", value: orders.filter(o => o.status === "Sent").length, c: "text-blue-500" },
-          { label: "Total Revenue", value: `$${orders.filter(o => o.status === "Received").reduce((s, o) => s + o.grand_total, 0).toFixed(0)}`, c: "text-indigo-500" },
+          { label: "Total Revenue", value: `₹${orders.filter(o => o.status === "Received").reduce((s, o) => s + o.grand_total, 0).toFixed(0)}`, c: "text-indigo-500" },
         ].map(s => (
           <div key={s.label} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-2xl p-4 shadow-sm">
             <p className="text-2xl font-black text-slate-800 dark:text-zinc-100">{loading ? "—" : s.value}</p>

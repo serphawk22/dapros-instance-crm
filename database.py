@@ -1126,6 +1126,9 @@ class Invoice(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     invoice_number: str = Field(max_length=50, index=True)
     client_id: Optional[int] = Field(default=None, foreign_key="client_profiles.id")
+    quote_id: Optional[int] = Field(default=None, foreign_key="quotes.id")
+    proposal_id: Optional[int] = Field(default=None, foreign_key="proposals.id", index=True)
+    deal_id: Optional[int] = Field(default=None, foreign_key="deals.id")
     service_request_id: Optional[int] = Field(default=None, foreign_key="service_requests.id")
     amount: float = Field(default=0.0)
     tax: float = Field(default=0.0)
@@ -1194,6 +1197,8 @@ class Proposal(SQLModel, table=True):
     client_id: Optional[int] = Field(default=None, foreign_key="client_profiles.id")
     lead_id: Optional[int] = Field(default=None, foreign_key="leads.id")
     recipient_type: str = Field(default="client")  # "client" or "lead"
+    deal_id: Optional[int] = Field(default=None, foreign_key="deals.id")
+    public_uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), index=True, max_length=50)
     service_request_id: Optional[int] = Field(default=None, foreign_key="service_requests.id")
     content: Optional[str] = Field(default=None, sa_column=Column(Text))
     line_items: Optional[List] = Field(default_factory=list, sa_column=Column(JSON))
@@ -1494,6 +1499,8 @@ class CRMQuote(SQLModel, table=True):
     lead_id: Optional[int] = Field(default=None, foreign_key="leads.id")
     client_id: Optional[int] = Field(default=None, foreign_key="client_profiles.id")
     contact_id: Optional[int] = Field(default=None, foreign_key="contacts.id")
+    deal_id: Optional[int] = Field(default=None, foreign_key="deals.id")
+    public_uuid: str = Field(default_factory=lambda: str(uuid.uuid4()), index=True, max_length=50)
     status: str = Field(default="Draft", max_length=50)  # Draft, Sent, Accepted, Rejected, Expired
     subtotal: float = Field(default=0.0)
     tax_total: float = Field(default=0.0)
@@ -1506,6 +1513,18 @@ class CRMQuote(SQLModel, table=True):
     owner_id: Optional[int] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class ProposalComment(SQLModel, table=True):
+    """Chat messages/negotiations for a specific quote/proposal"""
+    __tablename__ = "proposal_comments"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    quote_id: Optional[int] = Field(default=None, foreign_key="quotes.id", index=True)
+    proposal_id: Optional[int] = Field(default=None, foreign_key="proposals.id", index=True)
+    author_name: str = Field(max_length=255)
+    author_type: str = Field(default="client", max_length=50) # 'client' or 'internal'
+    content: str = Field(sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 class SalesOrder(SQLModel, table=True):
@@ -2032,3 +2051,17 @@ class TaskSheetEntry(SQLModel, table=True):
     completion_date: Optional[str] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class StockMovement(SQLModel, table=True):
+    """SCM2-54: Stock in/out log for inventory items."""
+    __tablename__ = "stock_movements"
+    tenant_id: Optional[int] = Field(default=None, foreign_key="tenants.id", index=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    item_id: int = Field(index=True)
+    change: float = Field(default=0.0)  # +in / -out
+    reason: str = Field(default="Adjustment", max_length=50)
+    reference: Optional[str] = Field(default=None, max_length=255)
+    balance_after: Optional[float] = Field(default=None)
+    author_id: Optional[int] = Field(default=None)
+    created_at: datetime = Field(default_factory=_utcnow)
