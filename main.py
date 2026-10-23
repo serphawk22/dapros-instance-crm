@@ -592,6 +592,43 @@ app.include_router(inbox_router)
 from routers.followups import router as followups_router
 app.include_router(followups_router)
 
+# SCM2: lead sources, revenue & costs, negotiation, ownership, meeting history, timezone
+from routers.scm2_features import router as scm2_router, ensure_scm2_schema, resolve_lead_source, reassign_owner
+app.include_router(scm2_router)
+app.include_router(scm2_router, prefix="/scm2")
+
+# Command center: full lead-source analytics + whole-CRM dashboard overview
+from routers.command_center import router as command_center_router
+app.include_router(command_center_router)
+
+# AI Reports: Natural-language prompt-based CRM reporting & sales conversion analysis
+from routers.ai_reports import router as ai_reports_router
+app.include_router(ai_reports_router)
+
+@app.on_event("startup")
+def _scm2_startup():
+    try:
+        ensure_scm2_schema()
+    except Exception as e:
+        print(f"[scm2] schema bootstrap failed: {e}")
+
+# Follow-ups (/follow-ups): scheduling, AI-personalised emails, automatic reminders.
+from routers.follow_ups import router as follow_ups_router, ensure_followup_schema, start_reminder_worker
+app.include_router(follow_ups_router)
+
+@app.on_event("startup")
+def _followups_startup():
+    try:
+        ensure_followup_schema()
+        from modules.background import jobs_enabled
+        if jobs_enabled():
+            start_reminder_worker(60)
+        else:
+            print("[followups] BACKGROUND_JOBS=0: reminder worker NOT started.")
+    except Exception as e:
+        print(f"[followups] startup failed: {e}")
+
+
 from routers.email_campaigns import router as email_campaigns_router
 app.include_router(email_campaigns_router)
 
@@ -708,6 +745,7 @@ def _email_stack_startup():
 
 @app.on_event("startup")
 def on_startup():
+    from sqlalchemy import text
     patch_openai()
     try:
         create_db_and_tables()
@@ -1989,6 +2027,12 @@ class TaskSheetEntryRequest(BaseModel):
     blocker: Optional[str] = None
     follow_up_date: Optional[str] = None
     completion_date: Optional[str] = None
+    outreaches_count: Optional[int] = 0
+    positives_count: Optional[int] = 0
+    negatives_count: Optional[int] = 0
+    followups_scheduled: Optional[int] = 0
+    meetings_scheduled: Optional[int] = 0
+    key_focus: Optional[str] = None
 
 
 class InvoiceCreateRequest(BaseModel):
@@ -3526,53 +3570,124 @@ def list_users(role: Optional[str] = None, session: Session = Depends(get_sessio
 
 @app.get("/users/{user_id}/stats")
 def get_user_stats(user_id: int, session: Session = Depends(get_session)):
+    from database import Deal, Invoice, ClientProfile, Lead, Meeting, CallLog, FollowUp, Task
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
         
-    # Sales team stats
-    if user.role in ["Admin", "SalesManager", "Employee"]:
-        # Clients handling
-        clients_count = len(session.exec(select(ClientProfile).where(ClientProfile.assignedEmployeeId == user.id)).all())
+    # Sales team / Staff performance stats
+    if user.role in ["Admin", "SuperAdmin", "SalesManager", "Employee", "Sales", "Demo"]:
+        # Deals & financial figures
+        deals = session.exec(select(Deal).where(Deal.assigned_to == user.id)).all()
+        won_deals = [d for d in deals if str(d.stage).strip().lower() in ["closed won", "won"]]
+        lost_deals = [d for d in deals if str(d.stage).strip().lower() in ["closed lost", "lost"]]
+        in_progress_deals = [d for d in deals if str(d.stage).strip().lower() not in ["closed won", "won", "closed lost", "lost"]]
         
-        # Leads converted
-        converted_leads_count = len(session.exec(select(Lead).where(Lead.owner_id == user.id, Lead.is_converted == True)).all())
+        won_revenue = sum((d.final_value or d.value or 0.0) for d in won_deals)
+        
+        # Clients handling
+        clients = session.exec(select(ClientProfile).where(ClientProfile.assignedEmployeeId == user.id)).all()
+        client_ids = [c.id for c in clients]
+        
+        # Invoices / Due amounts
+        invoices = session.exec(select(Invoice).where(Invoice.client_id.in_(client_ids))).all() if client_ids else []
+        due_invoices = [inv for inv in invoices if str(inv.status).strip().lower() not in ["paid", "cancelled"]]
+        invoiced_due = sum((inv.total or 0.0) for inv in due_invoices)
+        pipeline_due = sum((d.final_value or d.value or 0.0) for d in in_progress_deals)
+        revenue_due = invoiced_due if invoiced_due > 0 else pipeline_due
+        
+        # Also check paid invoices to add to revenue made if available
+        paid_invoices = [inv for inv in invoices if str(inv.status).strip().lower() == "paid"]
+        paid_invoices_total = sum((inv.total or 0.0) for inv in paid_invoices)
+        if paid_invoices_total > won_revenue:
+            won_revenue = paid_invoices_total
+
+        # Client Leads
+        leads = session.exec(select(Lead).where(Lead.owner_id == user.id).order_by(Lead.created_at.desc())).all()
+        converted_leads_count = sum(1 for l in leads if l.is_converted or str(l.status).strip().lower() in ["converted", "won"])
+        
+        # Meetings
+        all_meetings = session.exec(select(Meeting).order_by(Meeting.scheduled_at.desc())).all()
+        meetings = [
+            m for m in all_meetings
+            if m.host_id == user.id or (m.attendees and any((user.name and user.name in str(a)) for a in m.attendees))
+        ]
+        
+        # Calls
+        user_name_str = user.name or ""
+        calls = session.exec(select(CallLog).where(or_(CallLog.assigned_to == user_name_str, CallLog.assigned_to == str(user.id))).order_by(CallLog.received_at.desc())).all()
+        
+        # Follow-ups
+        followups = session.exec(select(FollowUp).where(or_(FollowUp.owner_id == user.id, FollowUp.created_by == user.id)).order_by(FollowUp.due_at.desc())).all()
         
         # Current active tasks
         active_tasks = session.exec(select(Task).where(Task.assigned_to == user.id, Task.status.notin_(["approved", "rejected"]))).all()
-        assigned_cases = session.exec(select(Case).where(Case.assigned_to == user.id)).all()
         
         return {
             "type": "sales",
-            "clients_handling": clients_count,
+            "revenue_made": round(won_revenue, 2),
+            "revenue_due": round(revenue_due, 2),
+            "won_deals_count": len(won_deals),
+            "lost_deals_count": len(lost_deals),
+            "in_progress_deals_count": len(in_progress_deals),
+            "total_deals_count": len(deals),
+            "clients_count": len(clients),
+            "clients": [
+                {"id": c.id, "company_name": c.companyName or "Unnamed Account", "status": getattr(c, "status", "Active")}
+                for c in clients[:20]
+            ],
+            "leads_count": len(leads),
             "leads_converted": converted_leads_count,
-            "cases_assigned": len(assigned_cases),
+            "leads": [
+                {
+                    "id": l.id,
+                    "company_name": l.company_name or "Unnamed Lead",
+                    "status": l.status or "New",
+                    "estimated_value": getattr(l, "estimated_value", getattr(l, "value", 0.0)) or 0.0,
+                    "source": l.source or "Direct",
+                    "created_at": l.created_at.isoformat() if getattr(l, "created_at", None) else None
+                }
+                for l in leads[:30]
+            ],
+            "meetings_count": len(meetings),
+            "meetings": [
+                {
+                    "id": m.id,
+                    "title": m.title,
+                    "scheduled_at": m.scheduled_at.isoformat() if m.scheduled_at else None,
+                    "status": m.status or "Scheduled",
+                    "meeting_type": m.meeting_type or "Meeting",
+                    "location": m.location or m.meeting_link or ""
+                }
+                for m in meetings[:20]
+            ],
+            "calls_count": len(calls),
+            "calls": [
+                {
+                    "id": c.id,
+                    "phone_number": c.phone_number,
+                    "duration_seconds": c.duration_seconds or 0,
+                    "summary": c.summary or "",
+                    "received_at": (c.received_at or c.createdAt).isoformat() if (c.received_at or c.createdAt) else None
+                }
+                for c in calls[:20]
+            ],
+            "followups_count": len(followups),
+            "followups": [
+                {
+                    "id": f.id,
+                    "title": f.title,
+                    "channel": f.channel or "Email",
+                    "priority": f.priority or "Medium",
+                    "status": f.status or "Pending",
+                    "due_at": f.due_at.isoformat() if f.due_at else None
+                }
+                for f in followups[:20]
+            ],
             "active_tasks": [
                 {"id": t.id, "title": t.title, "status": t.status, "priority": t.priority} 
-                for t in active_tasks
+                for t in active_tasks[:10]
             ]
-        }
-        
-    # Dev team stats
-    elif user.role in ["ProjectMember", "Intern"]:
-        if not user.name:
-            tickets = []
-        else:
-            tickets = session.exec(select(ProjectTicket).where(ProjectTicket.current_owner.ilike(user.name))).all()
-            
-        total_tickets = len(tickets)
-        in_dev = sum(1 for t in tickets if t.current_state == "In Dev")
-        in_qa = sum(1 for t in tickets if t.current_state == "Given to QA")
-        in_prod = sum(1 for t in tickets if t.current_state == "Prod Release")
-        assigned_cases = session.exec(select(Case).where(Case.assigned_to == user.id)).all()
-        
-        return {
-            "type": "dev",
-            "total_tickets": total_tickets,
-            "in_dev": in_dev,
-            "in_qa": in_qa,
-            "in_prod": in_prod,
-            "cases_assigned": len(assigned_cases)
         }
         
     return {"type": "unknown"}
@@ -3593,21 +3708,25 @@ def delete_user(user_id: int, session: Session = Depends(get_session)):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/employees")
 def list_employees(session: Session = Depends(get_session)):
-    query = select(User).where(User.role.in_(["Employee", "Admin", "SalesManager"]))
+    query = select(User).where(User.role.in_(["Employee", "Admin", "SalesManager", "Sales Manager"]))
     tenant_id = current_tenant_id.get()
-    if tenant_id:
+    if tenant_id and tenant_id > 1:
         query = query.where(User.tenant_id == tenant_id)
+    elif tenant_id == 1:
+        query = query.where((User.tenant_id == 1) | (User.tenant_id == None))
     employees = session.exec(query).all()
     return {"employees": [_user_dict(u) for u in employees]}
 
 
 @app.get("/employees/workload")
 def get_employees_workload(session: Session = Depends(get_session)):
-    """Return each sales team member with their active client and active lead counts."""
-    query = select(User).where(User.role.in_(["Employee", "Admin", "SalesManager"]))
+    """Return each sales team member with their active client and active lead counts, plus conversion rate."""
+    query = select(User).where(User.role.in_(["Employee", "Admin", "SalesManager", "Sales Manager"]))
     tenant_id = current_tenant_id.get()
-    if tenant_id:
+    if tenant_id and tenant_id > 1:
         query = query.where(User.tenant_id == tenant_id)
+    elif tenant_id == 1:
+        query = query.where((User.tenant_id == 1) | (User.tenant_id == None))
     employees = session.exec(query).all()
 
     result = []
@@ -3628,10 +3747,18 @@ def get_employees_workload(session: Session = Depends(get_session)):
             )
         ).all())
 
+        all_leads = session.exec(select(Lead).where(Lead.owner_id == emp.id)).all()
+        total_leads = len(all_leads)
+        converted_leads = sum(1 for l in all_leads if (l.is_converted or l.status == "Converted" or getattr(l, "stage", None) == "Converted"))
+        conv_rate = round((converted_leads / total_leads * 100), 1) if total_leads > 0 else 0.0
+
         d = _user_dict(emp)
         d["active_clients"] = client_count
         d["active_leads"] = lead_count
         d["total_active"] = client_count + lead_count
+        d["total_leads"] = total_leads
+        d["converted_leads"] = converted_leads
+        d["conversion_rate"] = conv_rate
         result.append(d)
 
     # Sort by total workload ascending (least busy first)
@@ -4527,6 +4654,68 @@ def update_client(
     session.commit()
     session.refresh(cp)
     return {"client": _client_dict(cp, session)}
+
+
+@app.patch("/clients/{client_id}")
+@app.patch("/clients/{client_id}/status")
+def patch_client_status(client_id: int, body: Dict[str, Any] = Body(...), session: Session = Depends(get_session)):
+    from database import Deal, Proposal
+    from datetime import datetime
+
+    cp = session.get(ClientProfile, client_id)
+    if not cp:
+        raise HTTPException(status_code=404, detail="Client not found")
+    status = body.get("status")
+    if status:
+        cp.status = status
+        # Cascade client status changes to Deal stage and Proposal status
+        deal_stage_map = {
+            "Proposal Sent": "Proposal Sent",
+            "Negotiation": "Negotiation",
+            "Won": "Closed Won",
+            "Lost": "Closed Lost",
+        }
+        prop_status_map = {
+            "Proposal Sent": "Sent",
+            "Negotiation": "Negotiation",
+            "Won": "Accepted",
+            "Lost": "Rejected",
+        }
+        if status in deal_stage_map:
+            deals = session.exec(select(Deal).where(Deal.client_id == client_id)).all()
+            for d in deals:
+                d.stage = deal_stage_map[status]
+                if status == "Won":
+                    d.won_at = utc_now()
+                    if d.value and not d.final_value:
+                        d.final_value = d.value
+                elif status != "Won":
+                    d.won_at = None
+                d.updated_at = utc_now()
+                session.add(d)
+        if status in prop_status_map:
+            props = session.exec(select(Proposal).where(Proposal.client_id == client_id)).all()
+            for pr in props:
+                pr.status = prop_status_map[status]
+                if status == "Won":
+                    pr.signed_at = utc_now()
+                pr.updated_at = utc_now()
+                session.add(pr)
+
+    if "assignedEmployeeId" in body:
+        cp.assignedEmployeeId = body["assignedEmployeeId"]
+    elif "assigned_employee_id" in body:
+        cp.assignedEmployeeId = body["assigned_employee_id"]
+    elif "employee_id" in body:
+        cp.assignedEmployeeId = body["employee_id"]
+    for k, v in body.items():
+        if hasattr(cp, k) and k not in ["id", "status", "assignedEmployeeId", "assigned_employee_id", "employee_id"]:
+            setattr(cp, k, v)
+    session.add(cp)
+    session.commit()
+    session.refresh(cp)
+    return {"client": _client_dict(cp, session)}
+
 
 
 @app.post("/clients/{client_id}/swot")
@@ -5596,6 +5785,703 @@ Provide a JSON response with exactly these keys:
 # ─────────────────────────────────────────────────────────────────────────────
 # Client Tickets
 # ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/clients/{client_id}/full-analysis")
+def trigger_full_analysis(client_id: int, session: Session = Depends(get_session)):
+    """Trigger full AI analysis. Stores report inside email_agent_data as JSON with __report_status key."""
+    cp = session.get(ClientProfile, client_id)
+    if not cp:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Mark pending immediately using existing email_agent_data field
+    import json as _j
+    cr = session.exec(select(ClientResearch).where(ClientResearch.client_id == client_id)).first()
+    if not cr:
+        cr = ClientResearch(client_id=client_id)
+    existing = {}
+    try:
+        existing = _j.loads(cr.email_agent_data) if cr.email_agent_data else {}
+    except Exception:
+        existing = {}
+    existing["__report_status"] = "pending"
+    existing["__full_report"] = None
+    cr.email_agent_data = _j.dumps(existing)
+    session.add(cr)
+    session.commit()
+
+    import threading, json as _json, asyncio as _asyncio
+
+    def _run():
+        try:
+            from modules.llm_engine import deep_investigate_company
+            from modules.scraper import research_and_map_company
+            from sqlmodel import Session as _S, select as _sel
+            from database import ClientResearch as _CR, ClientProfile as _CP, engine as _eng
+            import json as _j2
+
+            url = cp.websiteUrl or ""
+            company = cp.companyName or ""
+            if not url and company:
+                slug = company.lower().replace(" ", "").replace(",", "").replace(".", "")
+                url = f"https://www.{slug}.com"
+
+            raw_text = ""
+            service_mapping = []
+            try:
+                loop = _asyncio.new_event_loop()
+                scrape = loop.run_until_complete(research_and_map_company(url))
+                loop.close()
+                raw_text = scrape.get("raw_text", "") or ""
+                service_mapping = scrape.get("service_mapping", [])
+            except Exception as se:
+                print(f"[FullAnalysis] scrape failed: {se}")
+
+            data = deep_investigate_company(company_name=company, website=url, scraped_text=raw_text)
+
+            report = data.get("full_markdown_report", "") or data.get("executive_verdict", "") or ""
+            if service_mapping:
+                report += "\n\n## Recommended Services\n"
+                for s in service_mapping:
+                    cs = s.get("company_service", "")
+                    ds = s.get("dapros_service", "")
+                    if cs or ds:
+                        report += f"- **{cs}** → {ds}\n"
+
+            with _S(_eng) as sess:
+                rec = sess.exec(_sel(_CR).where(_CR.client_id == client_id)).first()
+                if not rec:
+                    rec = _CR(client_id=client_id)
+                # Merge into email_agent_data
+                merged = dict(data)
+                merged["__report_status"] = "done"
+                merged["__full_report"] = report
+                rec.email_agent_data = _j2.dumps(merged)
+                rec.company_overview = data.get("company_overview", "") or data.get("executive_verdict", "")
+                icps = data.get("ideal_customer_profiles", [])
+                rec.pain_points = _j2.dumps(icps) if icps else None
+                rec.business_goals = _j2.dumps(data.get("gtm_recommendations", {})) if data.get("gtm_recommendations") else None
+                rec.competitors = _j2.dumps(data.get("competitive_landscape", {})) if data.get("competitive_landscape") else None
+                rec.updated_at = utc_now()
+                sess.add(rec)
+                sess.commit()
+            print(f"[FullAnalysis] Done for client {client_id}")
+        except Exception as ex:
+            import traceback
+            traceback.print_exc()
+            from sqlmodel import Session as _S2
+            from database import ClientResearch as _CR2, engine as _eng2
+            import json as _j3
+            with _S2(_eng2) as sess2:
+                rec2 = sess2.exec(__import__('sqlmodel').select(_CR2).where(_CR2.client_id == client_id)).first()
+                if rec2:
+                    try:
+                        existing2 = _j3.loads(rec2.email_agent_data) if rec2.email_agent_data else {}
+                    except Exception:
+                        existing2 = {}
+                    existing2["__report_status"] = "error"
+                    rec2.email_agent_data = _j3.dumps(existing2)
+                    sess2.add(rec2)
+                    sess2.commit()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "message": "Full analysis started"}
+
+
+@app.get("/clients/{client_id}/full-analysis")
+def get_full_analysis(client_id: int, session: Session = Depends(get_session)):
+    """Poll this. Returns {status: pending|done|error|not_started, report: str|null}"""
+    import json as _j
+    cr = session.exec(select(ClientResearch).where(ClientResearch.client_id == client_id)).first()
+    if not cr or not cr.email_agent_data:
+        return {"status": "not_started", "report": None}
+    try:
+        d = _j.loads(cr.email_agent_data)
+        return {"status": d.get("__report_status", "not_started"), "report": d.get("__full_report")}
+    except Exception:
+        return {"status": "not_started", "report": None}
+
+
+
+
+
+@app.post("/clients/{client_id}/extract-services")
+def extract_services(client_id: int, session: Session = Depends(get_session)):
+    cp = session.get(ClientProfile, client_id)
+    if not cp:
+        raise HTTPException(status_code=404, detail="Client not found")
+        
+    research = session.exec(select(ClientResearch).where(ClientResearch.client_id == client_id)).first()
+    
+    context = f"Company Name: {cp.companyName}\n"
+
+
+    if research and research.company_overview:
+        context += f"Overview: {research.company_overview}\n"
+        
+    try:
+        prompt = f"""Analyze the following company data and extract a list of services they offer.
+For each service, provide a name, a brief description, and an estimated approximate cost (in rupees, e.g. 1500).
+Return a JSON array of objects with keys: name, description, approx_cost.
+Data:
+{context}"""
+        import json
+        from modules.llm_engine import get_openai_client
+        
+        client_openai = get_openai_client()
+        response = client_openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a data extraction AI. Output raw JSON array of objects. No markdown formatting, just the raw JSON array. If you cannot find services, guess based on the industry."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.2
+        )
+        raw_res = response.choices[0].message.content
+        
+        try:
+            services_data = json.loads(raw_res)
+        except:
+            if "```json" in raw_res:
+                raw_res = raw_res.split("```json")[1].split("```")[0].strip()
+                services_data = json.loads(raw_res)
+            else:
+                services_data = []
+                
+        if not isinstance(services_data, list):
+            services_data = []
+            
+        added_count = 0
+        from database import MarketplaceService
+        for srv in services_data:
+            if not srv.get("name"): continue
+            
+            # Try parsing approx_cost as float
+            cost = 0.0
+            raw_cost = str(srv.get("approx_cost", 0)).replace('₹', '').replace('$', '').replace(',', '').strip()
+            try:
+                cost = float(raw_cost)
+            except:
+                cost = 0.0
+                
+            ms = MarketplaceService(
+                tenant_id=cp.tenant_id,
+                service_name=srv["name"],
+                description=srv.get("description", ""),
+                estimated_cost=cost,
+                cost_is_estimated=True,
+                provider_client_id=cp.id,
+                provider_name=cp.companyName or "Unknown Provider",
+                category="General"
+            )
+            session.add(ms)
+            added_count += 1
+            
+        cp.services_offered = json.dumps(services_data)
+        session.add(cp)
+        session.commit()
+        
+        return {"ok": True, "services": services_data, "marketplace_entries_added": added_count}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/clients/{client_id}/generate-outbound-draft")
+def generate_outbound_draft(client_id: int, session: Session = Depends(get_session)):
+    check_tenant_limit(session, "emails")
+    cp = session.get(ClientProfile, client_id)
+    if not cp:
+        raise HTTPException(status_code=404, detail="Client not found")
+        
+    try:
+        from modules.llm_engine import get_openai_client
+        import json as _json
+        client_ai = get_openai_client()
+        
+        # ── Safe upsert: always fetch (or create) research in ONE place ──────
+        research = session.exec(select(ClientResearch).where(ClientResearch.client_id == client_id)).first()
+        
+        # If no OSINT data yet, run deep investigation synchronously
+        if not research or not research.email_agent_data:
+            from modules.llm_engine import deep_investigate_company
+            url = cp.websiteUrl or cp.website or ""
+            if not url and cp.companyName:
+                slug = cp.companyName.lower().replace(" ", "").replace(",","").replace(".","")
+                url = f"https://www.{slug}.com"
+            
+            if url:
+                print(f"[DraftGen] No existing research for client {client_id}. Running deep investigation first...")
+                try:
+                    osint_data = deep_investigate_company(
+                        company_name=cp.companyName or "Unknown",
+                        website=url,
+                        scraped_text=""
+                    )
+                    if not research:
+                        research = ClientResearch(client_id=client_id, tenant_id=current_tenant_id.get())
+                        session.add(research)
+                        session.flush()  # get the id without committing
+                    research.company_overview = osint_data.get("company_overview", "")
+                    research.email_agent_data = _json.dumps(osint_data)
+                    session.commit()
+                    print(f"[DraftGen] Deep investigation complete for client {client_id}")
+                except Exception as osint_err:
+                    session.rollback()
+                    print(f"[DraftGen] OSINT failed (continuing with draft anyway): {osint_err}")
+                    # Re-fetch research after rollback
+                    research = session.exec(select(ClientResearch).where(ClientResearch.client_id == client_id)).first()
+
+        research_context = ""
+        if research:
+            research_context = f"""
+            Company Overview: {research.company_overview or 'N/A'}
+            Pain Points: {research.pain_points or 'N/A'}
+            Business Goals: {research.business_goals or 'N/A'}
+            """
+            if research.email_agent_data:
+                try:
+                    ea_data = _json.loads(research.email_agent_data)
+                    research_context += f"\nEmail Agent Intel: {_json.dumps(ea_data.get('company_info', {}), indent=2)}"
+                except:
+                    pass
+
+        # Get Notes and Conversations
+        notes = session.exec(select(ClientNote).where(ClientNote.client_id == client_id).order_by(ClientNote.created_at.desc()).limit(10)).all()
+        conversations = session.exec(select(ConversationLog).where(ConversationLog.client_id == client_id).order_by(ConversationLog.created_at.desc()).limit(5)).all()
+        
+        interaction_context = ""
+        if notes:
+            interaction_context += "Recent Notes:\n" + "\n".join([f"- {n.content}" for n in notes]) + "\n"
+        if conversations:
+            interaction_context += "Recent Conversations:\n" + "\n".join([f"- {c.type} on {c.created_at}: {c.description or c.title}" for c in conversations]) + "\n"
+
+        prompt = f"""
+        You are an expert SDR (Sales Development Representative) at an agency. 
+        Write a highly personalized, cold outreach email draft for the following prospect.
+        Company: {cp.companyName or 'Unknown'}
+        Website: {cp.websiteUrl or 'Unknown'}
+        {research_context}
+
+        {interaction_context}
+        If there are recent notes or conversations above, make sure the email acknowledges them appropriately as a follow-up. If none exist, write a standard cold outreach email based on the research.
+
+        
+        Return ONLY valid JSON matching this schema exactly (no markdown formatting):
+        {{
+            "subject": "Email subject",
+            "english_body": "Email body in English",
+            "spanish_body": "Email body translated to Spanish",
+            "whatsapp_draft": "Short, punchy WhatsApp message (plain text, emojis allowed)"
+        }}
+        """
+        
+        resp = client_ai.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=800,
+        )
+        content = resp.choices[0].message.content.strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            
+        data = _json.loads(content)
+        
+        # Save as a draft in SentEmail
+        from database import SentEmail, User
+        user = session.get(User, cp.userId) if cp.userId else None
+        to_email = user.email if user else "unknown@example.com"
+        
+        draft = SentEmail(
+            tenant_id=current_tenant_id.get(),
+            client_id=client_id,
+            to_email=to_email,
+            subject=data.get("subject", "Proposal"),
+            english_body=data.get("english_body", ""),
+            spanish_body=data.get("spanish_body", ""),
+            draft_json=_json.dumps(data),
+            manual=True,
+            status="Draft",  # generated, never sent — keeps it out of the Inbox's Sent view
+            sent_at=utc_now()
+        )
+        session.add(draft)
+        
+        # ── Safe upsert research (use existing row, never re-insert) ─────────
+        if not research:
+            research = session.exec(select(ClientResearch).where(ClientResearch.client_id == client_id)).first()
+        if not research:
+            research = ClientResearch(client_id=client_id, tenant_id=current_tenant_id.get())
+            session.add(research)
+        
+        ea_payload = {}
+        if research.email_agent_data:
+            try:
+                ea_payload = _json.loads(research.email_agent_data)
+            except:
+                pass
+                
+        ea_payload["draft"] = data
+        ea_payload["email_hook"] = data.get("whatsapp_draft", "Custom outreach generated from latest interactions.")
+        
+        research.email_agent_data = _json.dumps(ea_payload)
+        
+        session.commit()
+        return {"ok": True, "draft": data, "email_id": draft.id}
+        
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to generate draft: {str(e)}")
+
+
+
+
+# ─── Extract Client Services from Website ─────────────────────────────────────
+
+@app.post("/clients/{client_id}/extract-services")
+async def extract_client_services_endpoint(client_id: int, session: Session = Depends(get_session)):
+    """
+    Scrapes the client's website and uses AI to extract services they offer.
+    Falls back to LLM world-knowledge when website is unreachable (DNS, timeout, bot-block).
+    Stores results in: ClientProfile.services_offered + MarketplaceService table.
+    """
+    cp = session.get(ClientProfile, client_id)
+    if not cp:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    website_url = cp.websiteUrl
+    company_name = cp.companyName or "Unknown Company"
+
+    if not website_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Client has no website URL. Add one in the client profile first."
+        )
+
+    # ── Step 1: Try scraping (fail gracefully on any network error) ────────────
+    website_text = ""
+    scrape_method = "website_scrape"
+    try:
+        from modules.scraper import scrape_website
+        website_text = await scrape_website(website_url)
+        if website_text.startswith("ERROR"):
+            print(f"[extract-services] Scrape failed for {website_url}: {website_text[:100]}. Falling back to LLM.")
+            website_text = ""
+            scrape_method = "llm_fallback"
+    except Exception as scrape_err:
+        print(f"[extract-services] Scraper exception ({website_url}): {scrape_err}. Falling back to LLM.")
+        scrape_method = "llm_fallback"
+
+    # ── Step 2: Extract services (from scraped text, or via LLM knowledge) ─────
+    import json as _json
+    from modules.llm_engine import extract_client_services as _extract_services, get_openai_client
+
+    services = []
+
+    if website_text:
+        services = _extract_services(website_text, company_name)
+
+    # If scraping failed or extracted nothing → use LLM world-knowledge fallback
+    if not services:
+        scrape_method = "llm_fallback"
+        try:
+            oai = get_openai_client()
+            fallback_prompt = f"""You are a B2B business intelligence expert.
+
+The company "{company_name}" has website: {website_url}
+Industry: {cp.industry or "unknown"}
+
+We could not access their website. Based on the company name, domain, and industry,
+list the most likely services they offer.
+
+Return ONLY valid JSON:
+{{
+  "services": [
+    {{
+      "name": "Service name",
+      "brief": "1-2 sentence description of this service",
+      "category": "One of: SEO, Web Design, Marketing, Plumbing, Legal, Accounting, Consulting, Construction, Healthcare, Real Estate, IT Services, Landscaping, Cleaning, Electrical, HVAC, Retail, Education, Finance, Transportation, Other",
+      "approx_cost": 1200,
+      "cost_is_estimated": true
+    }}
+  ]
+}}
+
+Rules: 3-8 services max. approx_cost in INR. cost_is_estimated always true for fallback."""
+            resp = oai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": fallback_prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.3,
+            )
+            services = _json.loads(resp.choices[0].message.content).get("services", [])
+        except Exception as llm_err:
+            print(f"[extract-services] LLM fallback also failed: {llm_err}")
+
+    if not services:
+        return {
+            "ok": False,
+            "services": [],
+            "scrape_method": scrape_method,
+            "message": "Could not extract services. Try adding the Industry field to improve AI fallback accuracy.",
+        }
+
+    # ── Step 3: Save to ClientProfile.services_offered ────────────────────────
+    cp.services_offered = _json.dumps(services)
+    session.add(cp)
+
+    # ── Step 4: Upsert into MarketplaceService (skip exact name duplicates) ───
+    existing = session.exec(
+        select(MarketplaceService).where(
+            MarketplaceService.provider_client_id == client_id,
+            MarketplaceService.is_active == True,
+        )
+    ).all()
+    existing_by_name = {s.service_name.lower(): s for s in existing}
+
+    added = 0
+    updated = 0
+    for svc in services:
+        svc_name = svc.get("name", "").strip()
+        if not svc_name:
+            continue
+        key = svc_name.lower()
+        if key in existing_by_name:
+            # Update existing entry
+            ms = existing_by_name[key]
+            ms.description = svc.get("brief") or ms.description
+            ms.category = svc.get("category") or ms.category
+            ms.estimated_cost = float(svc.get("approx_cost", 0)) or ms.estimated_cost
+            ms.source = scrape_method
+            session.add(ms)
+            updated += 1
+        else:
+            ms = MarketplaceService(
+                service_name=svc_name,
+                normalized_name=svc_name,
+                category=svc.get("category"),
+                description=svc.get("brief"),
+                estimated_cost=float(str(svc.get("approx_cost", "0")).replace("₹", "").replace("$", "").replace(",", "").split("-")[0].strip() if str(svc.get("approx_cost", "0")).replace("₹", "").replace("$", "").replace(",", "").split("-")[0].strip().replace(".","").isdigit() else 0),
+                cost_is_estimated=svc.get("cost_is_estimated", True),
+                provider_name=company_name,
+                provider_client_id=client_id,
+                provider_industry=cp.industry,
+                provider_address=cp.address,
+                source=scrape_method,
+                tenant_id=current_tenant_id.get(),
+            )
+            session.add(ms)
+            existing_by_name[key] = ms
+            added += 1
+
+    session.commit()
+
+    method_label = "live website" if scrape_method == "website_scrape" else "AI knowledge (site unreachable)"
+    return {
+        "ok": True,
+        "services": services,
+        "scrape_method": scrape_method,
+        "marketplace_entries_added": added,
+        "marketplace_entries_updated": updated,
+        "message": f"Extracted {len(services)} services via {method_label}. Added {added} new + updated {updated} existing in Marketplace.",
+    }
+
+
+
+# ─── AI Copilot Insights ──────────────────────────────────────────────────────
+
+
+@app.post("/clients/{client_id}/ai-insights")
+def get_ai_insights(client_id: int, session: Session = Depends(get_session)):
+    cp = session.get(ClientProfile, client_id)
+    if not cp:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Gather context
+    notes = session.exec(select(ClientNote).where(ClientNote.client_id == client_id).order_by(ClientNote.created_at.desc()).limit(10)).all()
+    convs = session.exec(select(ConversationLog).where(ConversationLog.client_id == client_id).order_by(ConversationLog.created_at.desc()).limit(10)).all()
+    activities = session.exec(select(ActivityLog).where(ActivityLog.clientId == client_id).order_by(ActivityLog.createdAt.desc()).limit(10)).all()
+    research = session.exec(select(ClientResearch).where(ClientResearch.client_id == client_id)).first()
+
+    notes_text = "\n".join([f"- {n.content[:200]}" for n in notes]) if notes else "No notes recorded."
+    convs_text = "\n".join([f"- [{c.type.upper()}] {c.title}: {(c.description or '')[:200]}" for c in convs]) if convs else "No conversations recorded."
+    activities_text = "\n".join([f"- {a.action}" for a in activities]) if activities else "No activities."
+    research_text = ""
+    if research:
+        research_text = f"Pain Points: {research.pain_points or 'unknown'}\nBusiness Goals: {research.business_goals or 'unknown'}\nCompetitors: {research.competitors or 'unknown'}"
+
+    last_contact = None
+    if convs:
+        last_contact = convs[0].created_at
+    elif activities:
+        last_contact = activities[0].createdAt
+
+    days_since_contact = None
+    if last_contact:
+        # sqlmodel>=0.0.4x returns tz-aware datetimes; utcnow() is naive and the subtraction raised (500)
+        if last_contact.tzinfo is None:
+            last_contact = last_contact.replace(tzinfo=timezone.utc)
+        days_since_contact = (datetime.now(timezone.utc) - last_contact).days
+
+    prompt = f"""You are an AI Sales Copilot analyzing a CRM client record. Provide actionable insights.
+
+CLIENT: {cp.companyName or 'Unknown'}
+STATUS: {cp.status}
+DEAL VALUE: {cp.deal_value or 'Not set'}
+LEAD SCORE: {cp.lead_score or 'Not set'}/100
+DAYS SINCE LAST CONTACT: {days_since_contact if days_since_contact is not None else 'Unknown'}
+
+RESEARCH:\n{research_text}
+NOTES:\n{notes_text}
+CONVERSATIONS:\n{convs_text}
+ACTIVITIES:\n{activities_text}
+
+Provide a JSON response with exactly these keys:
+{{
+  "client_summary": "2-3 sentence overview of client relationship and status",
+  "deal_health_score": <integer 0-100>,
+  "risks": ["risk 1", "risk 2"],
+  "next_best_action": "Single most important action to take right now",
+  "follow_up_recommendations": ["recommendation 1", "recommendation 2", "recommendation 3"],
+  "deal_health_label": "Hot|Warm|Cold|At Risk"
+}}"""
+
+    try:
+        from modules.llm_engine import get_openai_client
+        import json as _json
+        import concurrent.futures as _cf
+        def _call_openai():
+            client_ai = get_openai_client()
+            resp = client_ai.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0.0,
+                messages=[
+                    {"role": "system", "content": "You are an expert CRM sales analyst. Always respond with valid JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"}
+            )
+            return _json.loads(resp.choices[0].message.content)
+        with _cf.ThreadPoolExecutor(max_workers=1) as _executor:
+            _future = _executor.submit(_call_openai)
+            try:
+                insights = _future.result(timeout=25)
+            except (_cf.TimeoutError, Exception):
+                raise ValueError("OpenAI timed out or failed")
+    except Exception as e:
+        # Fallback insights if AI fails
+        score = 75 if days_since_contact and days_since_contact < 7 else (50 if days_since_contact and days_since_contact < 14 else 30)
+        insights = {
+            "client_summary": f"{cp.companyName or 'This client'} is currently {cp.status}. Review recent activity to determine next steps.",
+            "deal_health_score": score,
+            "risks": [
+                f"No contact in {days_since_contact} days" if days_since_contact and days_since_contact > 7 else "Monitor engagement levels",
+                "Ensure proposal is aligned with client goals"
+            ],
+            "next_best_action": "Schedule a follow-up call to reaffirm value proposition",
+            "follow_up_recommendations": [
+                "Send a personalized follow-up email",
+                "Schedule a discovery call this week",
+                "Share a relevant case study"
+            ],
+            "deal_health_label": "Warm" if score > 60 else "Cold"
+        }
+
+    return {"insights": insights}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lead AI Sales Copilot
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/leads/{lead_id}/ai-insights")
+def get_lead_ai_insights(lead_id: int, session: Session = Depends(get_session)):
+    lead = session.get(Lead, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    notes = session.exec(select(LeadNote).where(LeadNote.lead_id == lead_id).order_by(LeadNote.created_at.desc()).limit(10)).all()
+    convs = session.exec(select(ConversationLog).where(ConversationLog.lead_id == lead_id).order_by(ConversationLog.created_at.desc()).limit(10)).all()
+    activities = session.exec(select(ActivityLog).where(ActivityLog.lead_id == lead_id).order_by(ActivityLog.createdAt.desc()).limit(10)).all()
+    research = session.exec(select(ClientResearch).where(ClientResearch.lead_id == lead_id)).first()
+
+    notes_text = "\n".join(f"- {n.content[:200]}" for n in notes) if notes else "No notes recorded."
+    convs_text = "\n".join(f"- [{c.type.upper()}] {c.title}: {(c.description or '')[:200]}" for c in convs) if convs else "No conversations recorded."
+    activities_text = "\n".join(f"- {a.action}" for a in activities) if activities else "No activities."
+    research_text = ""
+    if research:
+        research_text = f"Pain Points: {research.pain_points or 'unknown'}\nBusiness Goals: {research.business_goals or 'unknown'}\nCompetitors: {research.competitors or 'unknown'}"
+
+    last_contact = None
+    if convs:
+        last_contact = convs[0].created_at
+    elif activities:
+        last_contact = activities[0].createdAt
+
+    days_since_contact = None
+    if last_contact:
+        # sqlmodel>=0.0.4x returns tz-aware datetimes; utcnow() is naive and the subtraction raised (500)
+        if last_contact.tzinfo is None:
+            last_contact = last_contact.replace(tzinfo=timezone.utc)
+        days_since_contact = (datetime.now(timezone.utc) - last_contact).days
+
+    prompt = f"""You are an AI Sales Copilot analyzing a CRM lead. Provide actionable insights.
+
+LEAD: {lead.company_name or 'Unknown'}
+STATUS: {lead.status}
+INDUSTRY: {lead.industry or 'Unknown'}
+DEAL VALUE: {getattr(lead, 'deal_value', None) or 'Not set'}
+DAYS SINCE LAST CONTACT: {days_since_contact if days_since_contact is not None else 'Unknown'}
+
+RESEARCH:\n{research_text}
+NOTES:\n{notes_text}
+CONVERSATIONS:\n{convs_text}
+ACTIVITIES:\n{activities_text}
+
+Provide a JSON response with exactly these keys:
+{{
+  "client_summary": "2-3 sentence overview of lead status",
+  "deal_health_score": <integer 0-100>,
+  "risks": ["risk 1", "risk 2"],
+  "next_best_action": "one action",
+  "follow_up_recommendations": ["recommendation"],
+  "deal_health_label": "Hot|Warm|Cold|At Risk"
+}}"""
+    try:
+        from modules.llm_engine import get_openai_client
+        import json as _json
+        import concurrent.futures as _cf
+        def _call_openai_lead():
+            resp = get_openai_client().chat.completions.create(
+                model="gpt-4o-mini", temperature=0,
+                messages=[
+                    {"role": "system", "content": "You are an expert CRM sales analyst. Always respond with valid JSON only."},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+            )
+            return _json.loads(resp.choices[0].message.content)
+        with _cf.ThreadPoolExecutor(max_workers=1) as _executor:
+            _future = _executor.submit(_call_openai_lead)
+            try:
+                insights = _future.result(timeout=25)
+            except (_cf.TimeoutError, Exception):
+                raise ValueError("OpenAI timed out or failed")
+    except Exception:
+        insights = {
+            "client_summary": f"{lead.company_name or 'This lead'} is currently {lead.status}.",
+            "deal_health_score": 50,
+            "risks": ["Review recent engagement and qualification data"],
+            "next_best_action": "Schedule a qualification follow-up",
+            "follow_up_recommendations": ["Confirm decision maker", "Validate business need"],
+            "deal_health_label": "Warm",
+        }
+    return {"insights": insights}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Client Tickets
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 @app.get("/clients/{client_id}/tickets")
 def get_client_tickets(client_id: int, session: Session = Depends(get_session)):
@@ -7847,23 +8733,43 @@ def _task_sheet_dict(entry: TaskSheetEntry, session: Session) -> dict:
 def list_task_sheet_entries(
     user_id: Optional[int] = None,
     work_date: Optional[str] = None,
+    period: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
+    # Task-sheet entries are visible to admins only. Everyone else just gets the submission form.
+    _require_admin_user(session, "Only admins can view task-sheet entries")
     q = select(TaskSheetEntry).order_by(TaskSheetEntry.work_date.desc(), TaskSheetEntry.updated_at.desc())
     if user_id:
         q = q.where(TaskSheetEntry.user_id == user_id)
     if work_date:
         q = q.where(TaskSheetEntry.work_date == work_date)
+    elif period:
+        today_d = datetime.utcnow().date()
+        if period == "today":
+            q = q.where(TaskSheetEntry.work_date == today_d.isoformat())
+        elif period == "yesterday":
+            q = q.where(TaskSheetEntry.work_date == (today_d - timedelta(days=1)).isoformat())
+        elif period == "this_week":
+            week_start = (today_d - timedelta(days=today_d.weekday())).isoformat()
+            q = q.where(TaskSheetEntry.work_date >= week_start)
+        elif period == "this_month":
+            month_start = today_d.replace(day=1).isoformat()
+            q = q.where(TaskSheetEntry.work_date >= month_start)
+
     entries = session.exec(q).all()
     return {"entries": [_task_sheet_dict(entry, session) for entry in entries]}
 
 
 @app.post("/task-sheet")
 def create_task_sheet_entry(body: TaskSheetEntryRequest, session: Session = Depends(get_session)):
-    today = datetime.utcnow().date().isoformat()
-    if body.work_date != today:
-        raise HTTPException(status_code=400, detail="New task-sheet entries can only be added for today")
-    entry = TaskSheetEntry(**body.model_dump(), tenant_id=current_tenant_id.get())
+    me = _current_user(session)
+    if not me:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    data = body.model_dump()
+    # Non-admins can only ever submit their own sheet; the user_id sent by the client is ignored.
+    if not _is_admin_user(me):
+        data["user_id"] = me.id
+    entry = TaskSheetEntry(**data, tenant_id=current_tenant_id.get())
     session.add(entry)
     session.commit()
     session.refresh(entry)
@@ -7872,17 +8778,151 @@ def create_task_sheet_entry(body: TaskSheetEntryRequest, session: Session = Depe
 
 @app.put("/task-sheet/{entry_id}")
 def update_task_sheet_entry(entry_id: int, body: TaskSheetEntryRequest, session: Session = Depends(get_session)):
+    _require_admin_user(session, "Only admins can edit task-sheet entries")
     entry = session.get(TaskSheetEntry, entry_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Task-sheet entry not found")
     for field, value in body.model_dump().items():
-        if field != "work_date":
-            setattr(entry, field, value)
-    entry.updated_at = datetime.utcnow()
+        setattr(entry, field, value)
+    entry.updated_at = utc_now()
     session.add(entry)
     session.commit()
     session.refresh(entry)
     return {"entry": _task_sheet_dict(entry, session)}
+
+
+@app.post("/task-sheet/ai-summary")
+def generate_task_sheet_ai_summary(
+    body: Dict[str, Any] = Body(...),
+    session: Session = Depends(get_session)
+):
+    _require_admin_user(session, "Only admins can view task-sheet summaries")
+    period = body.get("period", "today")
+    user_id = body.get("user_id")
+
+    today_d = datetime.utcnow().date()
+    q = select(TaskSheetEntry)
+    if user_id:
+        q = q.where(TaskSheetEntry.user_id == user_id)
+    if period == "today":
+        q = q.where(TaskSheetEntry.work_date == today_d.isoformat())
+    elif period == "yesterday":
+        q = q.where(TaskSheetEntry.work_date == (today_d - timedelta(days=1)).isoformat())
+    elif period == "this_week":
+        week_start = (today_d - timedelta(days=today_d.weekday())).isoformat()
+        q = q.where(TaskSheetEntry.work_date >= week_start)
+    elif period == "this_month":
+        month_start = today_d.replace(day=1).isoformat()
+        q = q.where(TaskSheetEntry.work_date >= month_start)
+
+    entries = session.exec(q.order_by(TaskSheetEntry.work_date.desc())).all()
+    user_ids = {e.user_id for e in entries}
+    users_map = {u.id: u for u in session.exec(select(User).where(User.id.in_(user_ids))).all()} if user_ids else {}
+
+    sales_summary = {}
+    tot_outreach = 0
+    tot_pos = 0
+    tot_neg = 0
+    tot_follow = 0
+    tot_meet = 0
+
+    for e in entries:
+        u = users_map.get(e.user_id)
+        name = u.name if u else f"Staff #{e.user_id}"
+        if name not in sales_summary:
+            sales_summary[name] = {
+                "user_name": name,
+                "role": u.role if u else "Sales",
+                "outreaches": 0,
+                "positives": 0,
+                "negatives": 0,
+                "followups": 0,
+                "meetings": 0,
+                "focus_items": [],
+                "work_summaries": []
+            }
+        s = sales_summary[name]
+        s["outreaches"] += (getattr(e, "outreaches_count", 0) or 0)
+        s["positives"] += (getattr(e, "positives_count", 0) or 0)
+        s["negatives"] += (getattr(e, "negatives_count", 0) or 0)
+        s["followups"] += (getattr(e, "followups_scheduled", 0) or 0)
+        s["meetings"] += (getattr(e, "meetings_scheduled", 0) or 0)
+        if getattr(e, "key_focus", None):
+            s["focus_items"].append(e.key_focus)
+        if e.summary:
+            s["work_summaries"].append(e.summary)
+
+        tot_outreach += (getattr(e, "outreaches_count", 0) or 0)
+        tot_pos += (getattr(e, "positives_count", 0) or 0)
+        tot_neg += (getattr(e, "negatives_count", 0) or 0)
+        tot_follow += (getattr(e, "followups_scheduled", 0) or 0)
+        tot_meet += (getattr(e, "meetings_scheduled", 0) or 0)
+
+    table_rows = []
+    for name, data in sales_summary.items():
+        outreach = data["outreaches"]
+        pos = data["positives"]
+        pos_rate = round((pos / outreach * 100), 1) if outreach > 0 else 0
+        if pos_rate >= 25 or data["meetings"] >= 2:
+            rating = "🔥 High Momentum"
+            advice = "Strong qualification and demo velocity. Accelerate proposal signoffs."
+        elif pos_rate >= 15 or data["followups"] >= 2:
+            rating = "⚡ Steady Progress"
+            advice = "Good volume. Follow up promptly on open queries to prevent drop-off."
+        else:
+            rating = "⚠️ Needs Support"
+            advice = "Optimize outreach script and target higher-intent decision makers."
+
+        table_rows.append({
+            "salesperson": name,
+            "outreaches": outreach,
+            "positives": pos,
+            "positive_rate": f"{pos_rate}%",
+            "negatives": data["negatives"],
+            "followups": data["followups"],
+            "meetings": data["meetings"],
+            "key_focus": data["focus_items"][0] if data["focus_items"] else "Pipeline outreach and followup",
+            "rating": rating,
+            "strategic_advice": advice
+        })
+
+    overall_rate = round((tot_pos / tot_outreach * 100), 1) if tot_outreach > 0 else 0
+    executive_summary = (
+        f"For {period.replace('_', ' ').capitalize()}, team recorded {tot_outreach} outreach interactions across {len(sales_summary)} salespeople, "
+        f"generating {tot_pos} positives ({overall_rate}% response rate) and {tot_neg} negatives. "
+        f"Scheduled {tot_follow} critical follow-ups and {tot_meet} client meetings. High pipeline momentum detected."
+    )
+
+    try:
+        from modules.llm_engine import get_openai_client
+        client_ai = get_openai_client()
+        prompt = f"""Summarize sales team task-sheet performance for period '{period}':
+Total outreaches: {tot_outreach}, positives: {tot_pos}, negatives: {tot_neg}, followups: {tot_follow}, meetings: {tot_meet}.
+Per salesperson breakdown:
+{table_rows}
+
+Provide a concise 3-sentence executive evaluation highlighting top momentum salespeople and key deal priorities."""
+        resp = client_ai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=250
+        )
+        executive_summary = resp.choices[0].message.content.strip()
+    except Exception:
+        pass
+
+    return {
+        "period": period,
+        "total_outreaches": tot_outreach,
+        "total_positives": tot_pos,
+        "positive_rate": f"{overall_rate}%",
+        "total_negatives": tot_neg,
+        "total_followups": tot_follow,
+        "total_meetings": tot_meet,
+        "executive_summary": executive_summary,
+        "comparison_table": table_rows
+    }
 
 
 @app.delete("/notifications/clear-all/{user_id}")
@@ -9913,6 +10953,32 @@ def get_deals(user_id: Optional[int] = None, session: Session = Depends(get_sess
         })
     return {"deals": results}
 
+@app.get("/deals/{deal_id}/proposals")
+def get_deal_proposals(deal_id: int, session: Session = Depends(get_session)):
+    proposals = session.exec(select(CRMQuote).where(CRMQuote.deal_id == deal_id).order_by(CRMQuote.created_at.desc())).all()
+    res = []
+    for p in proposals:
+        d = p.model_dump()
+        items = session.exec(select(QuoteItem).where(QuoteItem.quote_id == p.id)).all()
+        d["items"] = [i.model_dump() for i in items]
+        res.append(d)
+
+    # Also include proposals from Proposal table
+    prop_rows = session.exec(select(Proposal).where(Proposal.deal_id == deal_id).order_by(Proposal.created_at.desc())).all()
+    for pr in prop_rows:
+        res.append({
+            "id": pr.id,
+            "title": pr.title,
+            "quote_number": f"PROP-{str(pr.id).zfill(4)}",
+            "grand_total": pr.total_value or 0.0,
+            "currency": pr.currency or "INR",
+            "status": pr.status,
+            "public_uuid": getattr(pr, "public_uuid", None) or f"prop-{pr.id}",
+            "is_proposal": True,
+            "items": pr.line_items or [],
+        })
+    return {"proposals": res}
+
 @app.post("/deals")
 def create_deal(body: DealCreateRequest, session: Session = Depends(get_session)):
     deal = Deal(
@@ -11238,9 +12304,22 @@ class LeadCreateRequest(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     source: Optional[str] = None
+    lead_source_id: Optional[int] = None   # SCM2-62
+    utm_source: Optional[str] = None       # SCM2-63: auto-maps to a configured lead source
     owner_id: Optional[int] = None
     status: str = "New"
     notes: Optional[str] = None
+
+
+def _apply_lead_source(session: Session, lead: Lead, source_id: Optional[int], utm: Optional[str]) -> None:
+    """SCM2-62/63: keep Lead.lead_source_id and Lead.source text in sync."""
+    from database import LeadSource
+    src = session.get(LeadSource, source_id) if source_id else None
+    if not src:
+        src = resolve_lead_source(session, utm or lead.source)
+    if src:
+        lead.lead_source_id = src.id
+        lead.source = src.name
 
 class AccountCreateRequest(BaseModel):
     company_name: str
@@ -11279,7 +12358,16 @@ def get_leads(owner_id: Optional[int] = None, session: Session = Depends(get_ses
     if tenant_id and tenant_id != 1:
         query = query.where(Lead.tenant_id == tenant_id)
     leads = session.exec(query.order_by(Lead.created_at.desc())).all()
-    return {"leads": leads}
+    owner_ids = {l.owner_id for l in leads if l.owner_id}
+    users = {u.id: u for u in session.exec(select(User).where(User.id.in_(owner_ids))).all()} if owner_ids else {}
+    results = []
+    for l in leads:
+        d = l.dict()
+        owner = users.get(l.owner_id)
+        d["owner_name"] = owner.name if owner else None
+        d["salesperson_name"] = owner.name if owner else None
+        results.append(d)
+    return {"leads": results}
 
 @app.get("/leads/export-csv")
 def export_leads_csv(owner_id: Optional[int] = None, session: Session = Depends(get_session)):
@@ -11374,6 +12462,59 @@ def export_leads_csv(owner_id: Optional[int] = None, session: Session = Depends(
         headers={"Content-Disposition": "attachment; filename=serphawk_leads.csv"}
     )
 
+def auto_assign_lead_to_salesperson(session: Session, lead: Lead, tenant_id: Optional[int] = 1) -> Optional[User]:
+    """
+    Auto-assign lead to active salesperson using round-robin distribution,
+    breaking ties based on sales reps' historical conversion rate and performance.
+    Admins (e.g. System Admin) are strictly excluded from automated lead assignment.
+    """
+    if not tenant_id or tenant_id == -1:
+        tenant_id = 1
+
+    # First priority: actual sales team members (SalesManager, Sales)
+    q_reps = select(User).where(
+        User.role.in_(["SalesManager", "Sales"]),
+        User.is_active == True,
+        User.email.not_in(["admin@example.com", "superadmin@serphawk.in", "admin@serphawk.com"])
+    )
+    if tenant_id and tenant_id != 1:
+        q_reps = q_reps.where(User.tenant_id == tenant_id)
+    reps = session.exec(q_reps).all()
+
+    # Fallback to employees if no designated sales reps exist, but never assign to Admin
+    if not reps:
+        q_fallback = select(User).where(
+            User.role.in_(["Employee"]),
+            User.is_active == True,
+            User.email.not_in(["admin@example.com", "superadmin@serphawk.in", "admin@serphawk.com"])
+        )
+        if tenant_id and tenant_id != 1:
+            q_fallback = q_fallback.where(User.tenant_id == tenant_id)
+        reps = session.exec(q_fallback).all()
+
+    if not reps:
+        return None
+
+    # Calculate workload and conversion performance for each salesperson
+    rep_stats = []
+    for rep in reps:
+        assigned_leads = session.exec(select(Lead).where(Lead.owner_id == rep.id)).all()
+        total_assigned = len(assigned_leads)
+        converted_count = sum(1 for l in assigned_leads if l.is_converted or str(l.status).lower() in ["converted", "won"])
+        conversion_rate = (converted_count / total_assigned) if total_assigned > 0 else 0.5
+        rep_stats.append({
+            "rep": rep,
+            "total_assigned": total_assigned,
+            "converted_count": converted_count,
+            "conversion_rate": conversion_rate,
+        })
+
+    # Sort reps by: 1) Lowest current total (round-robin balancing), 2) Highest conversion rate
+    rep_stats.sort(key=lambda x: (x["total_assigned"], -x["conversion_rate"]))
+    chosen = rep_stats[0]["rep"]
+    lead.owner_id = chosen.id
+    return chosen
+
 @app.post("/leads")
 def create_lead(body: LeadCreateRequest, session: Session = Depends(get_session)):
     tenant_id = current_tenant_id.get()
@@ -11383,15 +12524,26 @@ def create_lead(body: LeadCreateRequest, session: Session = Depends(get_session)
             current_count = session.exec(select(func.count(Lead.id)).where(Lead.tenant_id == tenant_id)).one()
             if current_count >= tenant.limit_clients:
                 raise HTTPException(status_code=403, detail=f"Lead limit reached. Maximum allowed: {tenant.limit_clients}")
-    lead = Lead(**body.dict())
-    lead.tenant_id = current_tenant_id.get()
+    data = body.dict()
+    utm = data.pop("utm_source", None)
+    lead = Lead(**data)
+    lead.tenant_id = current_tenant_id.get() or 1
+    if not lead.owner_id:
+        try:
+            auto_assign_lead_to_salesperson(session, lead, lead.tenant_id or 1)
+        except Exception as e:
+            print("Auto-assign error on lead creation:", e)
+    try:
+        _apply_lead_source(session, lead, body.lead_source_id, utm)
+    except Exception as e:
+        print("Lead source resolve error:", e)
     session.add(lead)
     session.commit()
     session.refresh(lead)
     
     try:
         _notify_admins(
-            session, current_tenant_id.get(),
+            session, current_tenant_id.get() or 1,
             title=f"🎯 New Lead: {lead.company_name or lead.first_name}",
             message=f"Status: {lead.status} | Value: ${lead.estimated_value or 0}",
             notif_type="warning",
@@ -11420,6 +12572,216 @@ def create_lead(body: LeadCreateRequest, session: Session = Depends(get_session)
         print(f"AutoResearch trigger error for lead {lead.id}: {e}")
         
     return lead
+
+@app.get("/api/leads/webhook")
+@app.get("/leads/webhook")
+def get_website_lead_webhook_info():
+    """Information and healthcheck for website lead ingestion."""
+    return {
+        "status": "online",
+        "endpoint": "POST /api/leads/webhook",
+        "source": "Website (scmbpo.com)",
+        "description": "Public webhook endpoint for scmbpo.com PHP forms to send leads directly to SCMBPO CRM.",
+        "accepted_content_types": ["application/json", "application/x-www-form-urlencoded", "multipart/form-data"],
+        "fields": {
+            "name": "Prospect's name (or first_name, last_name, full_name)",
+            "company_name": "Company or Business Name (optional)",
+            "email": "Email address",
+            "phone": "Phone or Mobile number",
+            "form_name": "Name of the form filled on scmbpo.com (e.g. 'Contact Us', 'BPO Quote Request')",
+            "page_url": "URL of the page where form was submitted (e.g. 'https://scmbpo.com/contact.php')",
+            "service": "Service requested / interested in (e.g. 'Call Center Support')",
+            "message": "Message, inquiry details, or pitch request",
+            "source": "Default 'Website' (can also send 'Website (scmbpo.com)')",
+            "any_other_key": "Any extra fields are automatically captured and displayed in the lead dossier."
+        }
+    }
+
+@app.post("/api/leads/webhook")
+@app.post("/leads/webhook")
+async def ingest_website_lead_webhook(request: Request, session: Session = Depends(get_session)):
+    """
+    Public webhook endpoint for scmbpo.com PHP backend or any web form.
+    - Captures website source and exact form name.
+    - Stores complete message and all submitted fields for the sales pitch.
+    - Auto-assigns the sales person based on performance and workload formula.
+    - Creates linked Contact and timeline notes.
+    """
+    raw_body = {}
+    content_type = request.headers.get("content-type", "").lower()
+    if "application/json" in content_type:
+        try:
+            raw_body = await request.json()
+        except Exception:
+            raw_body = {}
+    else:
+        try:
+            form = await request.form()
+            raw_body = dict(form)
+        except Exception:
+            raw_body = {}
+
+    full_name = raw_body.get("name") or raw_body.get("full_name") or ""
+    if not full_name:
+        fn = raw_body.get("first_name", "")
+        ln = raw_body.get("last_name", "")
+        full_name = f"{fn} {ln}".strip()
+
+    company = raw_body.get("company_name") or raw_body.get("company") or raw_body.get("business_name") or full_name or "Website Lead"
+    email = raw_body.get("email") or raw_body.get("email_address")
+    phone = raw_body.get("phone") or raw_body.get("mobile") or raw_body.get("phone_number") or raw_body.get("contact_number")
+    form_name = raw_body.get("form_name") or raw_body.get("form_id") or raw_body.get("form_title") or "Website Inquiry Form"
+    page_url = raw_body.get("page_url") or raw_body.get("url") or raw_body.get("referer") or request.headers.get("referer") or "https://scmbpo.com"
+    service = raw_body.get("service") or raw_body.get("services_interested") or raw_body.get("service_requested") or raw_body.get("subject") or "BPO & ITES"
+    message = raw_body.get("message") or raw_body.get("notes") or raw_body.get("inquiry") or raw_body.get("comments") or raw_body.get("description") or ""
+    source = raw_body.get("source") or "Website"
+
+    reserved_keys = {
+        "name", "full_name", "first_name", "last_name", "company_name", "company", "business_name",
+        "email", "email_address", "phone", "mobile", "phone_number", "contact_number",
+        "form_name", "form_id", "form_title", "page_url", "url", "referer", "service",
+        "services_interested", "service_requested", "subject", "message", "notes", "inquiry",
+        "comments", "description", "source", "tenant_id", "api_key"
+    }
+    custom_fields = {k: v for k, v in raw_body.items() if k not in reserved_keys and v}
+
+    tenant_id = 1
+    if raw_body.get("tenant_id"):
+        try:
+            tenant_id = int(raw_body["tenant_id"])
+        except Exception:
+            tenant_id = 1
+
+    website_form_metadata = {
+        "website": "scmbpo.com",
+        "form_name": form_name,
+        "page_url": page_url,
+        "submitted_at": datetime.utcnow().isoformat(),
+        "contact_name": full_name,
+        "email": email or "",
+        "phone": phone or "",
+        "service_requested": service,
+        "message": message,
+        "custom_fields": custom_fields
+    }
+
+    notes_lines = [
+        f"🌐 Inbound Website Lead from scmbpo.com",
+        f"📋 Form Filled: {form_name}",
+        f"🔗 Submitted URL: {page_url}",
+    ]
+    if service:
+        notes_lines.append(f"🎯 Service Interest: {service}")
+    if message:
+        notes_lines.append(f"\n💬 Message / Pitch Request:\n{message}")
+    if custom_fields:
+        notes_lines.append(f"\n📝 Additional Submitted Fields:")
+        for k, v in custom_fields.items():
+            notes_lines.append(f"  • {k.replace('_', ' ').capitalize()}: {v}")
+
+    compiled_notes = "\n".join(notes_lines)
+
+    lead = Lead(
+        tenant_id=tenant_id,
+        company_name=company,
+        email=email,
+        phone=phone,
+        website=page_url,
+        source="Website",
+        status="New",
+        industry=service,
+        notes=compiled_notes,
+        ai_analysis_results={
+            "website_form": website_form_metadata,
+            "company_overview": f"Inbound lead received from scmbpo.com via '{form_name}'. Prospect: {full_name} ({email or phone or 'N/A'}). Pitch request: {message[:120] if message else service}."
+        }
+    )
+
+    assigned_rep = auto_assign_lead_to_salesperson(session, lead, tenant_id=tenant_id)
+
+    session.add(lead)
+    session.commit()
+    session.refresh(lead)
+
+    # Associated contact
+    try:
+        contact_first = full_name.split()[0] if full_name else company
+        contact_last = " ".join(full_name.split()[1:]) if full_name and len(full_name.split()) > 1 else None
+        contact = Contact(
+            tenant_id=tenant_id,
+            lead_id=lead.id,
+            first_name=contact_first,
+            last_name=contact_last,
+            full_name=full_name or company,
+            email=email,
+            mobile_number=phone,
+            notes=f"Submitted from scmbpo.com ({form_name})"
+        )
+        session.add(contact)
+    except Exception as e:
+        print("Contact creation error:", e)
+
+    # Timeline note
+    try:
+        cnote = ClientNote(
+            lead_id=lead.id,
+            author_name="Website Bot",
+            content=f"🌐 Website Form Submission: {form_name}\n\nClient Pitch Request / Message:\n\"{message or 'No message specified.'}\"\n\nAuto-assigned to: {assigned_rep.name if assigned_rep else 'Unassigned'}"
+        )
+        session.add(cnote)
+    except Exception as e:
+        print("ClientNote creation error:", e)
+
+    # Activity log
+    try:
+        act = ActivityLog(
+            lead_id=lead.id,
+            action="Website Form Submitted",
+            method="WEBHOOK",
+            content=f"Prospect submitted form '{form_name}' on scmbpo.com. Auto-assigned to {assigned_rep.name if assigned_rep else 'Unassigned'}."
+        )
+        session.add(act)
+    except Exception as e:
+        print("ActivityLog error:", e)
+
+    # Admin notification
+    try:
+        _notify_admins(
+            session, tenant_id,
+            title=f"🎯 New Website Lead: {company}",
+            message=f"Form: {form_name} | Assigned: {assigned_rep.name if assigned_rep else 'Admin'}",
+            notif_type="success",
+            link=f"/leads/{lead.id}"
+        )
+    except Exception:
+        pass
+
+    session.commit()
+
+    try:
+        _trigger_background_research(
+            entity_id=lead.id,
+            entity_type="lead",
+            company_name=lead.company_name or "",
+            website=lead.website or "https://scmbpo.com"
+        )
+    except Exception as e:
+        print("Background research error:", e)
+
+    return {
+        "success": True,
+        "lead_id": lead.id,
+        "company_name": lead.company_name,
+        "assigned_salesperson": {
+            "id": assigned_rep.id if assigned_rep else None,
+            "name": assigned_rep.name if assigned_rep else "Unassigned",
+            "email": assigned_rep.email if assigned_rep else None
+        },
+        "form_name": form_name,
+        "source": "Website",
+        "page_url": page_url,
+        "message": f"Lead #{lead.id} created successfully and assigned to {assigned_rep.name if assigned_rep else 'Unassigned'}."
+    }
 
 @app.get("/leads/{lead_id}")
 def get_lead(lead_id: int, session: Session = Depends(get_session)):
@@ -11584,7 +12946,7 @@ Return ONLY valid JSON:
   ]
 }}
 
-Rules: 3-8 services max. approx_cost in USD. cost_is_estimated always true for fallback."""
+Rules: 3-8 services max. approx_cost in INR. cost_is_estimated always true for fallback."""
             resp = oai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": fallback_prompt}],
@@ -11640,7 +13002,7 @@ Rules: 3-8 services max. approx_cost in USD. cost_is_estimated always true for f
             normalized_name=svc_name,
             category=svc.get("category"),
             description=svc.get("brief"),
-            estimated_cost=float(str(svc.get("approx_cost", "0")).replace("$", "").replace(",", "").split("-")[0].strip() if str(svc.get("approx_cost", "0")).replace("$", "").replace(",", "").split("-")[0].strip().replace(".","").isdigit() else 0),
+            estimated_cost=float(str(svc.get("approx_cost", "0")).replace("₹", "").replace("$", "").replace(",", "").split("-")[0].strip() if str(svc.get("approx_cost", "0")).replace("₹", "").replace("$", "").replace(",", "").split("-")[0].strip().replace(".","").isdigit() else 0),
             cost_is_estimated=svc.get("cost_is_estimated", True),
             provider_name=company_name,
             provider_client_id=None,
@@ -11671,12 +13033,156 @@ def update_lead(lead_id: int, body: LeadCreateRequest, session: Session = Depend
     lead = session.get(Lead, lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    for key, value in body.dict().items():
+    data = body.dict()
+    utm = data.pop("utm_source", None)
+    new_owner = data.pop("owner_id", None)
+    old_source_id = lead.lead_source_id
+    old_source_text = lead.source
+    for key, value in data.items():
         setattr(lead, key, value)
+    if lead.lead_source_id != old_source_id or lead.source != old_source_text or utm:
+        try:
+            _apply_lead_source(session, lead, lead.lead_source_id if lead.lead_source_id != old_source_id else None, utm)
+        except Exception as e:
+            print("Lead source resolve error:", e)
+    session.add(lead)
+    session.commit()
+    # SCM2-52: owner changes go through the ownership log
+    if new_owner and new_owner != lead.owner_id:
+        try:
+            reassign_owner(session, "lead", lead.id, new_owner, "Updated from lead form")
+        except HTTPException:
+            pass
+    session.refresh(lead)
+    return lead
+
+@app.patch("/leads/{lead_id}")
+@app.patch("/leads/{lead_id}/status")
+def patch_lead_status(lead_id: int, body: Dict[str, Any] = Body(...), session: Session = Depends(get_session)):
+    lead = session.get(Lead, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if "status" in body:
+        lead.status = body["status"]
+        if str(body["status"]).lower() == "converted":
+            lead.is_converted = True
+            # Convert lead to client while preserving the assigned salesperson
+            if not lead.converted_client_id:
+                existing_c = session.exec(select(ClientProfile).where(ClientProfile.companyName == lead.company_name)).first()
+                if not existing_c:
+                    c_user = None
+                    if lead.email:
+                        c_user = session.exec(select(User).where(User.email == lead.email)).first()
+                    client = ClientProfile(
+                        companyName=lead.company_name,
+                        projectName=lead.company_name,
+                        userId=c_user.id if c_user else None,
+                        assignedEmployeeId=lead.owner_id,
+                        industry=lead.industry,
+                        phone=lead.phone,
+                        websiteUrl=lead.website,
+                        status="Product Demo Scheduled",
+                        tenant_id=lead.tenant_id or current_tenant_id.get() or 1,
+                        contact_person=lead.company_name,
+                    )
+                    session.add(client)
+                    session.commit()
+                    session.refresh(client)
+                    lead.converted_client_id = client.id
+                else:
+                    if lead.owner_id and not existing_c.assignedEmployeeId:
+                        existing_c.assignedEmployeeId = lead.owner_id
+                        session.add(existing_c)
+                    lead.converted_client_id = existing_c.id
+    if "owner_id" in body:
+        lead.owner_id = body["owner_id"] if body["owner_id"] else None
+    for k, v in body.items():
+        if hasattr(lead, k) and k not in ["id", "status", "owner_id"]:
+            setattr(lead, k, v)
     session.add(lead)
     session.commit()
     session.refresh(lead)
     return lead
+
+
+@app.post("/leads/auto-assign")
+def auto_assign_unassigned_leads(session: Session = Depends(get_session)):
+    """
+    Auto-assign unassigned leads using round-robin distribution,
+    breaking ties based on sales reps' historical conversion rate and performance.
+    """
+    caller_id = current_salesperson_id.get()
+    if caller_id:
+        caller = session.get(User, caller_id)
+        if caller and caller.role not in ["Admin", "SuperAdmin"]:
+            raise HTTPException(status_code=403, detail="Only Admins can trigger auto-assigning leads.")
+
+    tenant_id = current_tenant_id.get()
+    q_reps = select(User).where(
+        User.role.in_(["SalesManager", "Sales"]),
+        User.is_active == True,
+        User.email.not_in(["admin@example.com", "superadmin@serphawk.in", "admin@serphawk.com"])
+    )
+    if tenant_id and tenant_id != 1:
+        q_reps = q_reps.where(User.tenant_id == tenant_id)
+    reps = session.exec(q_reps).all()
+    if not reps:
+        q_fallback = select(User).where(
+            User.role.in_(["Employee"]),
+            User.is_active == True,
+            User.email.not_in(["admin@example.com", "superadmin@serphawk.in", "admin@serphawk.com"])
+        )
+        if tenant_id and tenant_id != 1:
+            q_fallback = q_fallback.where(User.tenant_id == tenant_id)
+        reps = session.exec(q_fallback).all()
+    if not reps:
+        raise HTTPException(status_code=400, detail="No active salespeople found to assign leads.")
+
+    # Calculate workload and conversion performance for each salesperson
+    rep_stats = []
+    for rep in reps:
+        assigned_leads = session.exec(select(Lead).where(Lead.owner_id == rep.id)).all()
+        total_assigned = len(assigned_leads)
+        converted_count = sum(1 for l in assigned_leads if l.is_converted or str(l.status).lower() in ["converted", "won"])
+        conversion_rate = (converted_count / total_assigned) if total_assigned > 0 else 0.5
+        rep_stats.append({
+            "rep": rep,
+            "total_assigned": total_assigned,
+            "converted_count": converted_count,
+            "conversion_rate": conversion_rate,
+            "new_assigned": 0
+        })
+
+    # Fetch unassigned leads
+    q_unassigned = select(Lead).where(or_(Lead.owner_id == None, Lead.owner_id == 0))
+    if tenant_id and tenant_id != 1:
+        q_unassigned = q_unassigned.where(Lead.tenant_id == tenant_id)
+    unassigned_leads = session.exec(q_unassigned.order_by(Lead.created_at.asc())).all()
+
+    if not unassigned_leads:
+        return {"assigned_count": 0, "message": "All leads are already assigned to salespeople."}
+
+    assignments = []
+    for lead in unassigned_leads:
+        # Sort reps by: 1) Lowest current total (round-robin balancing), 2) Highest conversion rate
+        rep_stats.sort(key=lambda x: (x["total_assigned"] + x["new_assigned"], -x["conversion_rate"]))
+        chosen = rep_stats[0]
+        lead.owner_id = chosen["rep"].id
+        chosen["new_assigned"] += 1
+        session.add(lead)
+        assignments.append({
+            "lead_id": lead.id,
+            "company_name": lead.company_name,
+            "assigned_to": chosen["rep"].id,
+            "assigned_name": chosen["rep"].name
+        })
+
+    session.commit()
+    return {
+        "assigned_count": len(assignments),
+        "message": f"Successfully auto-assigned {len(assignments)} leads across {len(reps)} salespeople using round-robin and performance weighting.",
+        "assignments": assignments
+    }
 
 
 @app.post("/leads/{lead_id}/generate-outbound-draft")
@@ -12589,6 +14095,8 @@ class MeetingCreateRequest(BaseModel):
     contact_id: Optional[int] = None
     attendees: Optional[List[str]] = []
     notes: Optional[str] = None
+    meeting_link: Optional[str] = None  # SCM2-72
+    timezone: Optional[str] = None      # SCM2-74: IANA tz of the wall-clock time in scheduled_at
 
 class MeetingUpdateRequest(BaseModel):
     title: Optional[str] = None
@@ -12598,28 +14106,110 @@ class MeetingUpdateRequest(BaseModel):
     status: Optional[str] = None
     scheduled_at: Optional[str] = None
     duration_minutes: Optional[int] = None
+    host_id: Optional[int] = None
+    lead_id: Optional[int] = None
+    client_id: Optional[int] = None
+    contact_id: Optional[int] = None
     attendees: Optional[List[str]] = None
     notes: Optional[str] = None
     outcome: Optional[str] = None
+    meeting_link: Optional[str] = None
+    timezone: Optional[str] = None
+
+
+def _meeting_to_utc(value: Optional[str], tz_name: Optional[str]) -> Optional[datetime]:
+    """SCM2-74: parse a datetime string and normalise to UTC (aware, so sqlmodel 0.0.47 accepts it).
+
+    - Strings with an explicit offset/Z are converted directly.
+    - Naive strings are interpreted in `tz_name` (organiser's timezone).
+    - Without a timezone the value is stored as-is (legacy behaviour).
+    """
+    if not value:
+        return None
+    from datetime import timezone as _utc_mod
+    from zoneinfo import ZoneInfo
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None and tz_name:
+        try:
+            dt = dt.replace(tzinfo=ZoneInfo(tz_name))
+        except Exception:
+            return _to_aware_dt(dt)
+    return _to_aware_dt(dt)
+
+
+def _meeting_local(m: Meeting) -> Optional[datetime]:
+    """Meeting start in the organiser's timezone (or the stored value for legacy rows)."""
+    if not m.scheduled_at:
+        return None
+    if not m.timezone:
+        return m.scheduled_at
+    from datetime import timezone as _utc_mod
+    from zoneinfo import ZoneInfo
+    try:
+        return m.scheduled_at.replace(tzinfo=_utc_mod.utc).astimezone(ZoneInfo(m.timezone))
+    except Exception:
+        return m.scheduled_at
+
+
+def _meeting_time_label(m: Meeting, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    local = _meeting_local(m)
+    if not local:
+        return "TBD"
+    label = local.strftime(fmt)
+    if m.timezone:
+        label += f" {local.tzname() or ''} ({m.timezone})".rstrip()
+    return label
 
 def _meeting_dict(m: Meeting, session: Session) -> dict:
     host = session.get(User, m.host_id) if m.host_id else None
+    creator = session.get(User, m.created_by) if m.created_by else None
     lead = session.get(Lead, m.lead_id) if m.lead_id else None
     client = session.get(ClientProfile, m.client_id) if m.client_id else None
+    contact = session.get(Contact, m.contact_id) if m.contact_id else None
+    local = _meeting_local(m)
+    from datetime import timedelta as _td
+    end_utc = (m.scheduled_at + _td(minutes=m.duration_minutes)) if (m.scheduled_at and m.duration_minutes) else None
+    # Rows with a timezone are stored in UTC -> emit an explicit 'Z' so browsers convert to the viewer's zone.
+    # Legacy rows (no timezone) keep the old naive format.
+    suffix = "Z" if m.timezone else ""
     return {
         "id": m.id, "title": m.title, "description": m.description,
         "location": m.location, "meeting_type": m.meeting_type,
         "status": m.status,
-        "scheduled_at": m.scheduled_at.isoformat() if m.scheduled_at else None,
+        "scheduled_at": (m.scheduled_at.isoformat() + suffix) if m.scheduled_at else None,
+        "end_at": (end_utc.isoformat() + suffix) if end_utc else None,
+        "scheduled_at_local": local.strftime("%Y-%m-%dT%H:%M") if local else None,
+        "timezone": m.timezone,
+        "meeting_link": m.meeting_link,
         "duration_minutes": m.duration_minutes,
         "host_id": m.host_id, "host_name": host.name if host else None,
+        "created_by": m.created_by, "created_by_name": creator.name if creator else None,
         "lead_id": m.lead_id, "lead_name": lead.company_name if lead else None,
         "client_id": m.client_id, "client_name": client.companyName if client else None,
+        "contact_id": m.contact_id,
+        "contact_name": f"{contact.first_name} {contact.last_name or ''}".strip() if contact else None,
         "attendees": m.attendees or [],
         "notes": m.notes, "outcome": m.outcome,
         "created_at": m.created_at.isoformat(),
         "updated_at": m.updated_at.isoformat(),
     }
+
+def _get_visible_meeting(session: Session, meeting_id: int) -> Meeting:
+    """Load a meeting the caller is allowed to touch: admins any, everyone else only meetings they host
+    (are assigned to) or created."""
+    me = _current_user(session)
+    if not me:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    m = session.get(Meeting, meeting_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    if not _meeting_visible_to(m, me):
+        raise HTTPException(status_code=403, detail="You can only access meetings you are assigned to or created")
+    return m
+
 
 @app.get("/meetings")
 def list_meetings(
@@ -12628,11 +14218,17 @@ def list_meetings(
     client_id: Optional[int] = None,
     session: Session = Depends(get_session)
 ):
+    me = _current_user(session)
+    if not me:
+        raise HTTPException(status_code=401, detail="Unauthorized")
     q = select(Meeting).order_by(Meeting.scheduled_at.desc())
     tenant_id = current_tenant_id.get()
     if tenant_id:
         q = q.where(Meeting.tenant_id == tenant_id)
-        
+    # Salespeople see only the meetings assigned to them or created by them - never the whole tenant.
+    if not _sees_all_meetings(me):
+        q = q.where(or_(Meeting.host_id == me.id, Meeting.created_by == me.id))
+
     if status:
         q = q.where(Meeting.status == status)
     if lead_id:
@@ -12645,21 +14241,28 @@ def list_meetings(
 @app.post("/meetings")
 def create_meeting(body: MeetingCreateRequest, session: Session = Depends(get_session)):
     data = body.model_dump()
-    if data.get("scheduled_at"):
+    if data.get("timezone"):
         try:
-            data["scheduled_at"] = datetime.fromisoformat(data["scheduled_at"])
+            from zoneinfo import ZoneInfo
+            ZoneInfo(data["timezone"])
         except Exception:
-            data["scheduled_at"] = None
+            raise HTTPException(status_code=400, detail="Unknown timezone")
     else:
-        data["scheduled_at"] = None
+        # SCM2-74: fall back to the organiser's saved timezone
+        me = _current_user(session)
+        data["timezone"] = getattr(me, "timezone", None) if me else None
+    data["scheduled_at"] = _meeting_to_utc(data.get("scheduled_at"), data.get("timezone"))
+    if not data.get("host_id"):
+        data["host_id"] = current_salesperson_id.get()
     m = Meeting(**data)
     m.tenant_id = current_tenant_id.get()
+    m.created_by = current_salesperson_id.get()
     session.add(m)
     session.commit()
     session.refresh(m)
 
     try:
-        dt_str = m.scheduled_at.strftime("%b %d, %I:%M %p") if m.scheduled_at else "TBD"
+        dt_str = _meeting_time_label(m, "%b %d, %I:%M %p")
         _notify_admins(
             session, current_tenant_id.get(),
             title=f"📅 Meeting Scheduled: {m.title}",
@@ -12671,7 +14274,7 @@ def create_meeting(body: MeetingCreateRequest, session: Session = Depends(get_se
         pass
 
     # ── EMAIL NOTIFICATION TO ATTENDEES ──
-    dt_str = m.scheduled_at.strftime("%Y-%m-%d %H:%M") if m.scheduled_at else "TBD"
+    dt_str = _meeting_time_label(m)
     subject = f"Meeting Scheduled: {m.title}"
     notes = (m.notes or "").strip()
     recips = [a.strip() for a in (m.attendees or []) if a and a.strip()]
@@ -12699,12 +14302,13 @@ def create_meeting(body: MeetingCreateRequest, session: Session = Depends(get_se
             f"  Date/Time : {dt_str}\n"
             f"  Type      : {m.meeting_type}\n"
             f"  Location  : {m.location or 'TBD'}\n"
+            f"  Join link : {m.meeting_link or '—'}\n"
             f"  Duration  : {m.duration_minutes or 'TBD'} min\n"
             f"  Attendees : {', '.join(recips) or '—'}"
         )
         if notes:
             plain += f"\n\nNotes:\n{notes}"
-        plain += "\n\nThanks,\nDaPros"
+        plain += "\n\nThanks,\nSerpHawk CRM"
 
         esc = _html.escape
         title = esc(m.title or "Meeting")
@@ -12720,6 +14324,7 @@ def create_meeting(body: MeetingCreateRequest, session: Session = Depends(get_se
             ("Date/Time", date_time),
             ("Type", mtype),
             ("Location", location),
+            ("Join link", f'<a href="{esc(m.meeting_link)}" style="color:#2563eb">{esc(m.meeting_link)}</a>' if m.meeting_link else "—"),
             ("Duration", duration),
             ("Attendees", attendees),
         ]
@@ -12749,7 +14354,7 @@ def create_meeting(body: MeetingCreateRequest, session: Session = Depends(get_se
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(15,23,42,0.08)">
           <tr>
             <td style="background:linear-gradient(135deg,#1e3a8a,#2563eb);padding:28px 32px">
-              <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#c4b5fd">DaPros</p>
+              <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#93c5fd">SerpHawk CRM</p>
               <p style="margin:8px 0 0;font-size:22px;font-weight:800;color:#ffffff">📅 Meeting Scheduled</p>
             </td>
           </tr>
@@ -12764,7 +14369,7 @@ def create_meeting(body: MeetingCreateRequest, session: Session = Depends(get_se
           </tr>
           <tr>
             <td style="padding:16px 32px 24px;border-top:1px solid #eef2f7">
-              <p style="margin:0;color:#64748b;font-size:12px;line-height:1.5">Thanks,<br><span style="font-weight:700;color:#7c3aed">DaPros</span></p>
+              <p style="margin:0;color:#64748b;font-size:12px;line-height:1.5">Thanks,<br><span style="font-weight:700;color:#1d4ed8">SerpHawk CRM</span></p>
               <p style="color:#94a3b8;font-size:11px;line-height:1.5;margin:14px 0 0;border-top:1px solid #e2e8f0;padding-top:12px">📬 Didn't see this in your inbox? Sometimes automated emails land in spam or junk — please check there and mark us as "Not spam" so future emails reach you.</p>
             </td>
           </tr>
@@ -12808,28 +14413,26 @@ def create_meeting(body: MeetingCreateRequest, session: Session = Depends(get_se
 
 @app.get("/meetings/{meeting_id}")
 def get_meeting(meeting_id: int, session: Session = Depends(get_session)):
-    m = session.get(Meeting, meeting_id)
-    if not m:
-        raise HTTPException(status_code=404, detail="Meeting not found")
+    m = _get_visible_meeting(session, meeting_id)
     return {"meeting": _meeting_dict(m, session)}
 
 @app.put("/meetings/{meeting_id}")
+@app.patch("/meetings/{meeting_id}")
+@app.patch("/meetings/{meeting_id}/status")
 def update_meeting(meeting_id: int, body: MeetingUpdateRequest, session: Session = Depends(get_session)):
-    m = session.get(Meeting, meeting_id)
-    if not m:
-        raise HTTPException(status_code=404, detail="Meeting not found")
+    m = _get_visible_meeting(session, meeting_id)
     updates = body.model_dump(exclude_unset=True)
+    if updates.get("timezone"):
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(updates["timezone"])
+        except Exception:
+            raise HTTPException(status_code=400, detail="Unknown timezone")
     if "scheduled_at" in updates:
-        if updates["scheduled_at"]:
-            try:
-                updates["scheduled_at"] = datetime.fromisoformat(updates["scheduled_at"])
-            except Exception:
-                updates["scheduled_at"] = None
-        else:
-            updates["scheduled_at"] = None
+        updates["scheduled_at"] = _meeting_to_utc(updates["scheduled_at"], updates.get("timezone", m.timezone))
     for k, v in updates.items():
         setattr(m, k, v)
-    m.updated_at = datetime.now(timezone.utc)
+    m.updated_at = utc_now()
     session.add(m)
     session.commit()
     session.refresh(m)
@@ -12846,9 +14449,7 @@ def update_meeting(meeting_id: int, body: MeetingUpdateRequest, session: Session
 
 @app.delete("/meetings/{meeting_id}")
 def delete_meeting(meeting_id: int, session: Session = Depends(get_session)):
-    m = session.get(Meeting, meeting_id)
-    if not m:
-        raise HTTPException(status_code=404, detail="Meeting not found")
+    m = _get_visible_meeting(session, meeting_id)
     session.delete(m)
     session.commit()
     return {"ok": True}
@@ -12863,6 +14464,7 @@ async def import_meetings(file: UploadFile = File(...), session: Session = Depen
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not parse file: {e}")
     imported = 0
+    importer_id = current_salesperson_id.get()
     for _, row in df.iterrows():
         try:
             m = Meeting(
@@ -12871,6 +14473,9 @@ async def import_meetings(file: UploadFile = File(...), session: Session = Depen
                 notes=str(row.get("notes") or row.get("Notes") or "") or None,
                 status=str(row.get("status") or row.get("Status") or "Scheduled"),
                 meeting_type=str(row.get("meeting_type") or row.get("Type") or "Meeting"),
+                # Imported rows belong to whoever imported them, otherwise nobody but an admin could see them.
+                host_id=importer_id,
+                created_by=importer_id,
             )
             session.add(m)
             imported += 1
@@ -18137,4 +19742,291 @@ def _ensure_inventory_section_schema():
         except Exception:
             pass
 
+
+
+
+# ── 3. Dropped Clients ────────────────────────────────────────────────────────
+class DroppedClientCreate(BaseModel):
+    client_id: Optional[int] = None
+    company_name: str
+    reason: Optional[str] = None
+    reason_category: Optional[str] = "Other"
+    last_revenue: Optional[float] = 0
+    relationship_months: Optional[int] = 0
+    reactivation_potential: Optional[str] = "Low"
+    notes: Optional[str] = None
+
+
+@app.get("/dropped-clients")
+def list_dropped_clients(session: Session = Depends(get_session)):
+    from database import DroppedClient
+    rows = session.exec(select(DroppedClient).order_by(DroppedClient.dropped_at.desc())).all()
+    result = []
+    for r in rows:
+        d = r.model_dump() if hasattr(r, "model_dump") else dict(r)
+        d["dropped_at"] = r.dropped_at.isoformat() if r.dropped_at else None
+        result.append(d)
+    # analytics summary
+    categories: dict = {}
+    for r in rows:
+        cat = getattr(r, "reason_category", "Other") or "Other"
+        categories[cat] = categories.get(cat, 0) + 1
+    return {"dropped_clients": result, "category_breakdown": categories, "total": len(rows)}
+
+
+@app.post("/dropped-clients")
+def create_dropped_client(body: DroppedClientCreate, session: Session = Depends(get_session)):
+    from database import DroppedClient, ClientProfile, ActivityLog
+    uid = current_salesperson_id.get()
+    
+    # Automatically synchronize ClientProfile status to "Dropped"
+    cp = None
+    if body.client_id:
+        cp = session.get(ClientProfile, body.client_id)
+    if not cp and body.company_name:
+        cp = session.exec(select(ClientProfile).where(ClientProfile.companyName.ilike(body.company_name.strip()))).first()
+
+    raw_tid = current_tenant_id.get()
+    tenant_id = raw_tid if (raw_tid and raw_tid > 0) else (cp.tenant_id if (cp and cp.tenant_id and cp.tenant_id > 0) else 1)
+
+    row = DroppedClient(
+        tenant_id=tenant_id,
+        client_id=body.client_id or (cp.id if cp else None),
+        company_name=body.company_name,
+        reason=body.reason,
+        reason_category=body.reason_category or "Other",
+        dropped_by=uid if (uid and uid > 0) else None,
+        last_revenue=body.last_revenue or 0,
+        relationship_months=body.relationship_months or 0,
+        reactivation_potential=body.reactivation_potential or "Low",
+        notes=body.notes,
+    )
+    session.add(row)
+    session.flush()
+    row_dict = row.model_dump() if hasattr(row, "model_dump") else dict(row)
+
+    if cp:
+        cp.status = "Dropped"
+        session.add(cp)
+        try:
+            act = ActivityLog(
+                tenant_id=tenant_id,
+                clientId=cp.id,
+                action=f"Client marked as Dropped: {body.reason_category or 'Discontinued'}",
+                method="STATUS_UPDATE",
+                content=f"Client status changed to Dropped. Reason: {body.reason or 'No reason specified'}. Category: {body.reason_category or 'Other'}. Reactivation: {body.reactivation_potential or 'Low'}",
+                details=body.notes,
+            )
+            session.add(act)
+        except Exception:
+            pass
+
+    session.commit()
+    return {"dropped_client": row_dict, "message": "Dropped client recorded"}
+
+
+@app.get("/dropped-clients/by-client/{client_id}")
+def get_dropped_client_by_client_id(client_id: int, session: Session = Depends(get_session)):
+    from database import DroppedClient
+    row = session.exec(
+        select(DroppedClient).where(DroppedClient.client_id == client_id).order_by(DroppedClient.dropped_at.desc())
+    ).first()
+    if not row:
+        return {"dropped_client": None}
+    d = row.model_dump() if hasattr(row, "model_dump") else dict(row)
+    d["dropped_at"] = row.dropped_at.isoformat() if row.dropped_at else None
+    return {"dropped_client": d}
+
+
+@app.post("/dropped-clients/by-client/{client_id}/reactivate")
+def reactivate_dropped_client(client_id: int, session: Session = Depends(get_session)):
+    from database import ClientProfile, ActivityLog
+    cp = session.get(ClientProfile, client_id)
+    if not cp:
+        raise HTTPException(status_code=404, detail="Client not found")
+    cp.status = "Active"
+    session.add(cp)
+    try:
+        act = ActivityLog(
+            clientId=cp.id,
+            action="Client Reactivated",
+            method="STATUS_UPDATE",
+            content="Client status changed from Dropped back to Active.",
+        )
+        session.add(act)
+    except Exception:
+        pass
+    session.commit()
+    return {"ok": True, "message": "Client reactivated to Active status"}
+
+
+@app.delete("/dropped-clients/{dc_id}")
+def delete_dropped_client(dc_id: int, session: Session = Depends(get_session)):
+    from database import DroppedClient
+    row = session.get(DroppedClient, dc_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Record not found")
+    session.delete(row)
+    session.commit()
+    return {"ok": True}
+
+
+# ── 4. Salesperson Reassignment & History ──────────────────────────────────────
+class ReassignRequest(BaseModel):
+    client_id: int
+    to_user_id: int
+    reason: Optional[str] = None
+
+
+@app.post("/salesperson/reassign")
+def reassign_salesperson(body: ReassignRequest, session: Session = Depends(get_session)):
+    # SCM2-52: previously wrote to a non-existent `assigned_salesperson_id` column, so the
+    # owner never changed. Delegate to the shared ownership logic (updates assignedEmployeeId
+    # and logs to both ownership_history and salesperson_history).
+    h = reassign_owner(session, "client", body.client_id, body.to_user_id, body.reason)
+    return {"message": f"Client reassigned to {h.to_user_name}", "history_id": h.id}
+
+
+def _legacy_reassign_salesperson_unused(body: ReassignRequest, session: Session = Depends(get_session)):
+    from database import SalespersonHistory
+    uid = current_salesperson_id.get()
+    tenant_id = current_tenant_id.get() or 1
+
+    cp = session.get(ClientProfile, body.client_id)
+    if not cp:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    from_user_id   = cp.assigned_salesperson_id if hasattr(cp, "assigned_salesperson_id") else None
+    from_user_name: Optional[str] = None
+    to_user_name:   Optional[str] = None
+
+    if from_user_id:
+        fu = session.get(User, from_user_id)
+        from_user_name = fu.name if fu else None
+
+    to_user = session.get(User, body.to_user_id)
+    if not to_user:
+        raise HTTPException(status_code=404, detail="Target user not found")
+    to_user_name = to_user.name
+
+    # Log history
+    hist = SalespersonHistory(
+        tenant_id=tenant_id,
+        client_id=body.client_id,
+        from_user_id=from_user_id,
+        to_user_id=body.to_user_id,
+        from_user_name=from_user_name,
+        to_user_name=to_user_name,
+        reason=body.reason,
+        reassigned_by=uid,
+    )
+    session.add(hist)
+
+    # Update client assignment if column exists
+    if hasattr(cp, "assigned_salesperson_id"):
+        cp.assigned_salesperson_id = body.to_user_id  # type: ignore[assignment]
+        session.add(cp)
+
+    session.commit()
+    session.refresh(hist)
+    return {"message": f"Client reassigned to {to_user_name}", "history_id": hist.id}
+
+
+@app.get("/salesperson/history/{client_id}")
+def get_salesperson_history(client_id: int, session: Session = Depends(get_session)):
+    from database import SalespersonHistory
+    rows = session.exec(
+        select(SalespersonHistory)
+        .where(SalespersonHistory.client_id == client_id)
+        .order_by(SalespersonHistory.reassigned_at.desc())
+    ).all()
+    result = []
+    for r in rows:
+        d = r.model_dump() if hasattr(r, "model_dump") else {}
+        d["reassigned_at"] = r.reassigned_at.isoformat() if r.reassigned_at else None
+        result.append(d)
+    return {"history": result}
+
+
+# ── 5. Excel/CSV Campaign Upload: replaced by routers/email_campaigns.py (Email Agent → Bulk Excel
+# Upload). The old excel_campaigns / excel_campaign_records tables and their rows are kept.
+
+
+# ── 6. Management Dashboard ────────────────────────────────────────────────────
+@app.get("/management/dashboard")
+def management_dashboard(session: Session = Depends(get_session)):
+    """
+    Consolidated management stats: lead source breakdown, sentiment,
+    pipeline summary, dropped clients count, salesperson performance.
+    """
+    from sqlalchemy import func, text
+
+    # Lead source breakdown
+    lead_source_rows = session.exec(
+        select(Lead.lead_source, func.count(Lead.id).label("count"))
+        .group_by(Lead.lead_source)
+    ).all() if hasattr(Lead, "lead_source") else []
+    lead_sources = [{"source": r[0] or "Unknown", "count": r[1]} for r in lead_source_rows]
+
+    # Sentiment breakdown
+    sentiment_rows = session.exec(
+        select(Lead.sentiment, func.count(Lead.id).label("count"))
+        .group_by(Lead.sentiment)
+    ).all() if hasattr(Lead, "sentiment") else []
+    sentiments = [{"sentiment": r[0] or "Neutral", "count": r[1]} for r in sentiment_rows]
+
+    # Pipeline summary
+    deal_rows = session.exec(
+        select(Deal.stage, func.count(Deal.id).label("count"), func.sum(Deal.value).label("total_value"))
+        .group_by(Deal.stage)
+    ).all() if True else []
+    pipeline = [{"stage": r[0], "count": r[1], "total_value": float(r[2] or 0)} for r in deal_rows]
+
+    # Dropped clients count
+    dropped_count = 0
+    try:
+        from database import DroppedClient
+        dropped_count = session.exec(select(func.count(DroppedClient.id))).first() or 0
+    except Exception:
+        pass
+
+    # Salesperson performance (from deals)
+    sp_rows = session.exec(
+        select(
+            Deal.assigned_to,
+            func.count(Deal.id).label("deals"),
+            func.sum(Deal.value).label("pipeline_value"),
+        ).group_by(Deal.assigned_to)
+    ).all()
+    salesperson_perf = []
+    for r in sp_rows:
+        u = session.get(User, r[0]) if r[0] else None
+        salesperson_perf.append({
+            "user_id": r[0],
+            "salesperson": u.name if u else "Unassigned",
+            "deals": r[1],
+            "pipeline_value": float(r[2] or 0),
+        })
+
+    # Monthly leads (last 6 months)
+    from sqlalchemy import extract
+    monthly = []
+    for i in range(5, -1, -1):
+        target = datetime.utcnow().replace(day=1) - timedelta(days=i * 30)
+        count = session.exec(
+            select(func.count(Lead.id)).where(
+                extract("year", Lead.created_at) == target.year,
+                extract("month", Lead.created_at) == target.month,
+            )
+        ).first() or 0
+        monthly.append({"month": target.strftime("%b %Y"), "leads": count})
+
+    return {
+        "lead_sources": lead_sources,
+        "sentiments": sentiments,
+        "pipeline": pipeline,
+        "dropped_clients": dropped_count,
+        "salesperson_performance": salesperson_perf,
+        "monthly_leads": monthly,
+    }
 

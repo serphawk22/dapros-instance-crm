@@ -1,11 +1,7 @@
 "use client";
 import { useState, useEffect, useMemo, useRef, forwardRef, useImperativeHandle } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  FileText, Plus, X, Search, Loader2, Trash2, Building2,
-  ShoppingCart, Package, Minus, CheckCircle, IndianRupee,
-  BadgeDollarSign, User2, Download, Eye
-} from "lucide-react";
+import { FileText, Plus, X, Search, Loader2, Trash2, Building2, ShoppingCart, Package, Minus, CheckCircle, IndianRupee, User2, Download, Eye, FilePlus2, Link2, ArrowUpRight, Briefcase, TrendingUp } from "lucide-react";
 import { API_BASE_URL } from "@/config";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -19,9 +15,16 @@ interface Quote {
   grand_total: number; currency: string; lead_name?: string;
   client_name?: string; valid_until?: string; created_at: string;
   notes?: string; terms?: string; items?: QuoteItem[];
+  is_proposal?: boolean;
+  deal_id?: number;
+  deal_title?: string;
+  deal_stage?: string;
+  salesperson_id?: number;
+  salesperson_name?: string;
+  public_uuid?: string;
 }
 interface Lead   { id: number; company_name?: string; contact_name?: string; email?: string; }
-interface Client { id: number; companyName?: string; }
+interface Client { id: number; companyName?: string; assignedEmployeeId?: number; assignedEmployeeName?: string; }
 interface CatalogItem {
   id: number; name: string; sku: string; category: string;
   unit_price: number; description?: string; photo_url?: string | null;
@@ -38,7 +41,12 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 const INR_RATE = 4.5;
-function currSymbol(c: string) { return c === "INR" ? "₹" : "$"; }
+function currSymbol(c: string) {
+  if (c === "INR") return "₹";
+  if (c === "EUR") return "€";
+  if (c === "GBP") return "£";
+  return "₹";
+}
 function fmtMoney(v: number, c: string) {
   return `${currSymbol(c)}${v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
@@ -76,7 +84,6 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
     company_name: string | null;
     subject: string;
     body_html?: string;
-    body_fragment?: string;
     items: { description: string; quantity: number; unit_price: number }[];
     sendable: boolean;
   } | null>(null);
@@ -85,8 +92,8 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
   const [editableSubject, setEditableSubject] = useState("");
   const bodyRef = useRef<HTMLDivElement>(null);
   const bodyInitializedIdRef = useRef<number | null>(null);
-  const [manualRecipientEmail, setManualRecipientEmail] = useState("");
   const [downloadingQuote, setDownloadingQuote] = useState<Quote | null>(null);
+  const [convertingQuoteId, setConvertingQuoteId] = useState<number | null>(null);
 
   // Preview state (click a row to preview details, like proposals)
   const [previewQuote, setPreviewQuote] = useState<Quote | null>(null);
@@ -94,7 +101,7 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
 
   // Form
   const [form, setForm] = useState({
-    title: "", status: "Draft", currency: "MXN",
+    title: "", status: "Draft", currency: "INR",
     valid_until: "", notes: "",
     linked_to: "lead" as "lead" | "client" | "none",
     lead_id: "" as string | number,
@@ -114,16 +121,51 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
   const [catalogCategory, setCatalogCategory] = useState("All");
 
   // ── Data loading ─────────────────────────────────────────────────────────
-  const loadQuotes = () => {
+  const loadQuotes = async () => {
     setLoading(true);
-    fetch(`${API_BASE_URL}/quotes`)
-      .then(r => r.json())
-      .then(d => setQuotes(Array.isArray(d.quotes) ? d.quotes : []))
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    try {
+      const [qRes, pRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/quotes`).then(r => r.json()).catch(() => ({ quotes: [] })),
+        fetch(`${API_BASE_URL}/proposals`).then(r => r.json()).catch(() => ({ proposals: [] })),
+      ]);
+      const qList: Quote[] = Array.isArray(qRes.quotes) ? qRes.quotes : [];
+      const pList: Quote[] = Array.isArray(pRes.proposals) ? pRes.proposals.map((p: any) => ({
+        id: p.id,
+        quote_number: `PROP-${String(p.id).padStart(4, "0")}`,
+        title: p.title,
+        status: p.status,
+        grand_total: p.total_value || 0,
+        currency: p.currency || "INR",
+        client_name: p.client_name,
+        created_at: p.created_at,
+        notes: p.content,
+        valid_until: p.valid_until,
+        deal_id: p.deal_id,
+        deal_title: p.deal_title,
+        deal_stage: p.deal_stage,
+        salesperson_id: p.salesperson_id,
+        salesperson_name: p.salesperson_name,
+        public_uuid: p.public_uuid,
+        is_proposal: true,
+        items: (p.line_items || []).map((li: any) => ({
+          description: li.product_name || li.description || "Item",
+          quantity: li.quantity || 1,
+          unit_price: li.unit_price || 0,
+          provider: li.unit || "Custom",
+          total: (li.quantity || 1) * (li.unit_price || 0),
+        })),
+      })) : [];
+      setQuotes([...qList, ...pList].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(loadQuotes, []);
+  useEffect(() => {
+    loadQuotes();
+  }, []);
 
   // When the "Send Email" confirmation modal opens, load the email details so
   // the user can review exactly what will be sent (recipient, subject, items)
@@ -147,8 +189,7 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
   useEffect(() => {
     if (emailPreview && pendingSend && bodyRef.current) {
       if (bodyInitializedIdRef.current !== pendingSend.id) {
-        bodyRef.current.innerHTML = emailPreview.body_fragment || emailPreview.body_html || "";
-        setManualRecipientEmail(emailPreview.recipient_email || "");
+        bodyRef.current.innerHTML = emailPreview.body_html || "";
         bodyInitializedIdRef.current = pendingSend.id;
       }
     }
@@ -211,7 +252,7 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
 
   // ── Modal open/close ──────────────────────────────────────────────────────
   const openCreate = () => {
-    setForm({ title: "", status: "Draft", currency: "MXN", valid_until: "", notes: "", linked_to: "lead", lead_id: "", client_id: "" });
+    setForm({ title: "", status: "Draft", currency: "INR", valid_until: "", notes: "", linked_to: "lead", lead_id: "", client_id: "" });
     setCart([]);
     setCatalogSearch("");
     setCatalogCategory("All");
@@ -276,24 +317,49 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm("Delete quote?")) return;
-    await fetch(`${API_BASE_URL}/quotes/${id}`, { method: "DELETE" });
-    setQuotes(prev => prev.filter(q => q.id !== id));
-    setPreviewQuote(prev => prev && prev.id === id ? null : prev);
+  const handleDelete = async (q: Quote) => {
+    const docLabel = q.is_proposal ? "Proposal" : "Quote";
+    if (!confirm(`Delete ${docLabel} ${q.quote_number || `#${q.id}`}?`)) return;
+    const url = q.is_proposal ? `${API_BASE_URL}/proposals/${q.id}` : `${API_BASE_URL}/quotes/${q.id}`;
+    await fetch(url, { method: "DELETE" });
+    setQuotes(prev => prev.filter(item => !(item.id === q.id && item.is_proposal === q.is_proposal)));
+    setPreviewQuote(prev => prev && prev.id === q.id && prev.is_proposal === q.is_proposal ? null : prev);
+  };
+
+  const handleConvertToInvoice = async (q: Quote) => {
+    const docLabel = q.is_proposal ? "Proposal" : "Quote";
+    if (!confirm(`Convert ${docLabel} ${q.quote_number || `#${q.id}`} to Invoice?`)) return;
+    setConvertingQuoteId(q.id);
+    try {
+      const url = q.is_proposal
+        ? `${API_BASE_URL}/proposals/${q.id}/convert-to-invoice`
+        : `${API_BASE_URL}/quotes/${q.id}/convert-to-invoice`;
+      const res = await fetch(url, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setToast({ ok: true, msg: `Invoice created from ${docLabel} ${q.quote_number || `#${q.id}`}! Go to Billing → Invoices to view it.` });
+      } else {
+        setToast({ ok: false, msg: data.detail || "Failed to convert to invoice." });
+      }
+    } catch {
+      setToast({ ok: false, msg: "Failed to convert to invoice." });
+    } finally {
+      setConvertingQuoteId(null);
+    }
   };
 
   const setQuoteStatusLocal = (q: Quote, status: string) => {
-    setQuotes(prev => prev.map(qt => qt.id === q.id ? { ...qt, status } : qt));
-    setPreviewQuote(prev => prev && prev.id === q.id ? { ...prev, status } : prev);
+    setQuotes(prev => prev.map(qt => (qt.id === q.id && qt.is_proposal === q.is_proposal) ? { ...qt, status } : qt));
+    setPreviewQuote(prev => prev && prev.id === q.id && prev.is_proposal === q.is_proposal ? { ...prev, status } : prev);
   };
 
   const handleStatus = async (q: Quote, status: string) => {
-    if (status === "Sent") {
+    if (status === "Sent" && !q.is_proposal) {
       setPendingSend(q);
       return;
     }
-    await fetch(`${API_BASE_URL}/quotes/${q.id}`, {
+    const url = q.is_proposal ? `${API_BASE_URL}/proposals/${q.id}` : `${API_BASE_URL}/quotes/${q.id}`;
+    await fetch(url, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: q.title, status }),
     });
@@ -308,11 +374,7 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
       const res = await fetch(`${API_BASE_URL}/quotes/${q.id}/send-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Email-Confirmed": "1" },
-        body: JSON.stringify({
-          subject: editableSubject,
-          body_html: bodyRef.current?.innerHTML || "",
-          send_to: (manualRecipientEmail.trim() || emailPreview?.recipient_email || "").trim(),
-        }),
+        body: JSON.stringify({ subject: editableSubject, body_html: bodyRef.current?.innerHTML || "" }),
       });
       const data = await res.json().catch(() => ({}));
       if (data.email_sent) {
@@ -351,10 +413,30 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
     setPreviewQuote(q);
     setPreviewLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/quotes/${q.id}`);
+      const url = q.is_proposal ? `${API_BASE_URL}/proposals/${q.id}` : `${API_BASE_URL}/quotes/${q.id}`;
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
-        setPreviewQuote(data.quote || q);
+        if (q.is_proposal && data.proposal) {
+          setPreviewQuote({
+            ...q,
+            notes: data.proposal.content || q.notes,
+            valid_until: data.proposal.valid_until || q.valid_until,
+            salesperson_name: data.proposal.salesperson_name || q.salesperson_name,
+            deal_title: data.proposal.deal_title || q.deal_title,
+            deal_stage: data.proposal.deal_stage || q.deal_stage,
+            public_uuid: data.proposal.public_uuid || q.public_uuid,
+            items: (data.proposal.line_items || []).map((li: any) => ({
+              description: li.product_name || li.description || "Item",
+              quantity: li.quantity || 1,
+              unit_price: li.unit_price || 0,
+              provider: li.unit || "Custom",
+              total: (li.quantity || 1) * (li.unit_price || 0),
+            })),
+          });
+        } else if (data.quote) {
+          setPreviewQuote(data.quote);
+        }
       }
     } catch (e) { console.error(e); }
     finally { setPreviewLoading(false); }
@@ -387,28 +469,34 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
     return "";
   }
 
-  function handleDownloadSelect(provider: 'SERP_HAWK' | 'DAPROS') {
+  function handleDownloadSelect(provider: 'SERP_HAWK' | 'DAPROS' | 'SCM_BPO') {
     if (!downloadingQuote) return;
     const q = downloadingQuote;
     setDownloadingQuote(null);
-    // Use authenticated fetch (injects X-User-ID / X-Tenant-ID) so the backend
-    // can resolve the correct tenant for the quote, then trigger a file download.
-    fetch(`${API_BASE_URL}/quotes/${q.id}/pdf?provider=${provider}`)
+    const url = q.is_proposal
+      ? `${API_BASE_URL}/proposals/${q.id}/pdf?provider=${provider}`
+      : `${API_BASE_URL}/quotes/${q.id}/pdf?provider=${provider}`;
+
+    fetch(url)
       .then(res => {
         if (!res.ok) throw new Error(`PDF download failed (${res.status})`);
         return res.blob();
       })
       .then(blob => {
-        const url = URL.createObjectURL(blob);
+        const fileUrl = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
-        a.download = `${q.quote_number || `quote-${q.id}`}.pdf`;
+        a.href = fileUrl;
+        a.download = `${q.quote_number || (q.is_proposal ? `proposal-${q.id}` : `quote-${q.id}`)}.pdf`;
         document.body.appendChild(a);
         a.click();
         a.remove();
-        URL.revokeObjectURL(url);
+        URL.revokeObjectURL(fileUrl);
+        setToast({ ok: true, msg: `${q.is_proposal ? "Proposal" : "Quote"} PDF downloaded successfully.` });
       })
-      .catch(err => console.error(err));
+      .catch(err => {
+        console.error(err);
+        setToast({ ok: false, msg: "Failed to download PDF. Please try again." });
+      });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -439,7 +527,7 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
           { label: "Total Quotes", value: quotes.length, c: "text-amber-600" },
           { label: "Draft",        value: quotes.filter(q => q.status === "Draft").length, c: "text-slate-600" },
           { label: "Accepted",     value: quotes.filter(q => q.status === "Accepted").length, c: "text-emerald-600" },
-          { label: "Total Value",  value: `$${filtered.reduce((s, q) => s + (q.grand_total || 0), 0).toFixed(0)}`, c: "text-orange-600" },
+          { label: "Total Value",  value: `₹${filtered.reduce((s, q) => s + (q.grand_total || 0), 0).toFixed(0)}`, c: "text-orange-600" },
         ].map(s => (
           <div key={s.label} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-2xl p-4 shadow-sm">
             <p className={`text-2xl font-black ${s.c}`}>{loading ? "—" : s.value}</p>
@@ -467,8 +555,8 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
 
       {/* Table */}
       <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-2xl shadow-sm overflow-hidden">
-        <div className="hidden md:grid grid-cols-[auto_2fr_1.5fr_1fr_1fr_auto] gap-4 px-6 py-3 border-b border-slate-100 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/50">
-          {["#", "Title", "Lead / Client", "Amount", "Status", ""].map(h => (
+        <div className="hidden md:grid grid-cols-[auto_2fr_1.5fr_1.5fr_1fr_1fr_auto] gap-4 px-6 py-3 border-b border-slate-100 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/50">
+          {["#", "Title", "Lead / Client", "Sales Rep / Pipeline", "Amount", "Status", ""].map(h => (
             <p key={h} className="text-[10px] font-black uppercase tracking-widest text-slate-400">{h}</p>
           ))}
         </div>
@@ -483,16 +571,45 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
             </button>
           </div>
         ) : filtered.map((q, i) => (
-          <motion.div key={q.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.02 }}
+          <motion.div key={`${q.is_proposal ? 'p' : 'q'}-${q.id}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.02 }}
             onClick={() => openPreview(q)}
-            className="grid grid-cols-1 md:grid-cols-[auto_2fr_1.5fr_1fr_1fr_auto] gap-3 md:gap-4 items-center px-6 py-4 border-b border-slate-100 dark:border-zinc-800 last:border-0 hover:bg-slate-50 dark:hover:bg-zinc-800/40 group transition-colors cursor-pointer">
-            <span className="text-xs font-mono text-slate-400">{q.quote_number || `#${q.id}`}</span>
-            <p className="text-sm font-semibold text-slate-800 dark:text-zinc-100">{q.title}</p>
+            className="grid grid-cols-1 md:grid-cols-[auto_2fr_1.5fr_1.5fr_1fr_1fr_auto] gap-3 md:gap-4 items-center px-6 py-4 border-b border-slate-100 dark:border-zinc-800 last:border-0 hover:bg-slate-50 dark:hover:bg-zinc-800/40 group transition-colors cursor-pointer">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-xs font-mono text-slate-400">{q.quote_number || `#${q.id}`}</span>
+              <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full w-fit ${q.is_proposal ? "bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300" : "bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300"}`}>
+                {q.is_proposal ? "Proposal" : "Quote"}
+              </span>
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-slate-800 dark:text-zinc-100">{q.title}</p>
+              {q.public_uuid && (
+                <a
+                  href={`/p/${q.public_uuid}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 text-[11px] text-amber-600 hover:text-amber-700 font-medium hover:underline mt-0.5"
+                >
+                  <Link2 className="w-2.5 h-2.5" /> Live Proposal Link <ArrowUpRight className="w-2.5 h-2.5" />
+                </a>
+              )}
+            </div>
             <div className="flex items-center gap-1.5">
               <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               <span className="text-xs text-slate-600 dark:text-zinc-300 truncate">
                 {q.client_name || q.lead_name || <span className="text-slate-400 italic">No contact</span>}
               </span>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <div className="flex items-center gap-1 text-xs text-slate-700 dark:text-zinc-200">
+                <Briefcase className="w-3 h-3 text-slate-400 shrink-0" />
+                <span className="truncate">{q.salesperson_name || "Auto-mapped"}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300">
+                  <TrendingUp className="w-2.5 h-2.5" /> {q.deal_stage || "Negotiation"}
+                </span>
+              </div>
             </div>
             <span className="text-sm font-black text-slate-800 dark:text-zinc-100">
               {currSymbol(q.currency || "MXN")}{(q.grand_total || 0).toFixed(2)}
@@ -503,15 +620,37 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
               {STATUSES.map(s => <option key={s}>{s}</option>)}
             </select>
             <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+              {q.public_uuid && (
+                <a
+                  href={`/p/${q.public_uuid}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  title="Open Live Public Link"
+                  className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                </a>
+              )}
               <button onClick={e => { e.stopPropagation(); openPreview(q); }} title="Preview Quote"
                 className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-500 hover:bg-indigo-500/20">
                 <Eye className="w-3.5 h-3.5" />
               </button>
+              {q.status === 'Accepted' && (
+                <button
+                  onClick={e => { e.stopPropagation(); handleConvertToInvoice(q); }}
+                  disabled={convertingQuoteId === q.id}
+                  title="Convert to Invoice"
+                  className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 disabled:opacity-50"
+                >
+                  {convertingQuoteId === q.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FilePlus2 className="w-3.5 h-3.5" />}
+                </button>
+              )}
               <button onClick={e => { e.stopPropagation(); setDownloadingQuote(q); }} title="Download PDF"
                 className="p-1.5 rounded-lg bg-blue-500/10 text-blue-500 hover:bg-blue-500/20">
                 <Download className="w-3.5 h-3.5" />
               </button>
-              <button onClick={e => { e.stopPropagation(); handleDelete(q.id); }} title="Delete Quote"
+              <button onClick={e => { e.stopPropagation(); handleDelete(q); }} title="Delete Quote"
                 className="p-1.5 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500/20">
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
@@ -565,12 +704,14 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
                     <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Currency</p>
                     <div className="flex bg-slate-100 dark:bg-zinc-800 p-1 rounded-xl gap-1">
                       {[
-                        { code: "MXN", icon: BadgeDollarSign, label: "MXN ($)" },
-                        { code: "INR", icon: IndianRupee,     label: "INR (₹)" },
+                        { code: "EUR", label: "EUR (€)" },
+                        { code: "GBP", label: "GBP (£)" },
+                        { code: "INR", label: "INR (₹)" },
+                        { code: "MXN", label: "MXN (₹)" },
                       ].map(c => (
                         <button key={c.code} onClick={() => switchCurrency(c.code)}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${form.currency === c.code ? "bg-white dark:bg-zinc-700 shadow text-amber-600" : "text-slate-500"}`}>
-                          <c.icon className="w-3.5 h-3.5" />{c.label}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${form.currency === c.code ? "bg-white dark:bg-zinc-700 shadow text-amber-600" : "text-slate-500 hover:text-slate-700"}`}>
+                          {c.label}
                         </button>
                       ))}
                     </div>
@@ -622,6 +763,21 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
                             </option>
                           ))}
                         </select>
+                        {(() => {
+                          const c = clients.find(cl => String(cl.id) === String(form.client_id));
+                          if (!c) return null;
+                          return (
+                            <div className="mt-2 p-2.5 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-900 dark:text-amber-200 flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <Briefcase className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                <span>Sales Rep: <strong>{c.assignedEmployeeName || "Auto-assigned (Account Owner)"}</strong></span>
+                              </div>
+                              <span className="text-[10px] font-semibold px-2 py-0.5 bg-amber-200/60 dark:bg-amber-800/40 rounded-full text-amber-800 dark:text-amber-200">
+                                ⚡ Deals Pipeline: Auto-mapped to Negotiation
+                              </span>
+                            </div>
+                          );
+                        })()}
                         {clients.length === 0 && (
                           <p className="text-xs text-amber-600 mt-1">No clients found in database.</p>
                         )}
@@ -855,18 +1011,21 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[80]">
           <div className="bg-white dark:bg-zinc-900 rounded-2xl w-full max-w-sm shadow-2xl p-6 relative overflow-hidden border border-zinc-200 dark:border-zinc-800">
             <button onClick={() => setDownloadingQuote(null)} className="absolute top-4 right-4 p-2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 bg-zinc-100 dark:bg-zinc-800/50 rounded-full transition-colors"><X className="w-5 h-5"/></button>
-            <h3 className="text-xl font-black text-zinc-900 dark:text-white mb-1 tracking-tight">Download Quote</h3>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-5 font-medium">Download formal quotation PDF.</p>
+            <h3 className="text-xl font-black text-zinc-900 dark:text-white mb-2 tracking-tight">Download Quote</h3>
             <div className="space-y-3">
-              <button onClick={() => handleDownloadSelect('DAPROS')} className="w-full flex items-center justify-between p-4 rounded-xl border-2 border-emerald-500/50 bg-emerald-50/50 dark:bg-emerald-950/20 hover:bg-emerald-100/60 dark:hover:bg-emerald-900/40 hover:border-emerald-500 transition-all text-left group">
-                <div className="flex items-center gap-3">
-                  <img src="/dapros_logo.png" alt="DaPros" className="h-8 w-auto object-contain rounded bg-white p-1 shadow-sm" />
-                  <div>
-                    <div className="font-bold text-emerald-950 dark:text-emerald-300">DaPros</div>
-                    <div className="text-xs font-semibold text-emerald-700/80 dark:text-emerald-400/80">Formal Quotation (MXN / USD)</div>
-                  </div>
+              <button onClick={() => handleDownloadSelect('SCM_BPO')} className="w-full flex items-center justify-between p-4 rounded-xl border-2 border-amber-200 dark:border-amber-900/40 bg-amber-50/50 dark:bg-amber-900/10 hover:bg-amber-50 dark:hover:bg-amber-900/20 hover:border-amber-300 dark:hover:border-amber-700 transition-all text-left group">
+                <div>
+                  <div className="font-bold text-amber-900 dark:text-amber-300">SCM BPO Official Format</div>
+                  <div className="text-xs font-semibold text-amber-600/80 dark:text-amber-400/80">Corporate Executive Quotation (SCM Shipping Services)</div>
                 </div>
-                <Download className="w-5 h-5 text-emerald-600 group-hover:scale-110 transition-transform" />
+                <Download className="w-5 h-5 text-amber-500 group-hover:text-amber-600 transition-colors" />
+              </button>
+              <button onClick={() => handleDownloadSelect('SERP_HAWK')} className="w-full flex items-center justify-between p-4 rounded-xl border-2 border-indigo-100 dark:border-indigo-900/30 bg-indigo-50/50 dark:bg-indigo-900/10 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:border-indigo-200 dark:hover:border-indigo-800 transition-all text-left group">
+                <div>
+                  <div className="font-bold text-indigo-900 dark:text-indigo-300">SERP Hawk Format</div>
+                  <div className="text-xs font-semibold text-indigo-600/70 dark:text-indigo-400/70">Formal Proforma</div>
+                </div>
+                <Download className="w-5 h-5 text-indigo-400 group-hover:text-indigo-600 transition-colors" />
               </button>
             </div>
           </div>
@@ -912,43 +1071,6 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
               </div>
 
               <div className="p-6 space-y-5">
-                {/* DaPros Issuer Card */}
-                <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50/50 dark:from-emerald-950/20 dark:to-teal-950/10 border border-emerald-200/80 dark:border-emerald-800/40">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <img src="/dapros_logo.png" alt="DaPros" className="h-10 w-auto object-contain rounded-lg shadow-sm bg-white p-1" />
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-extrabold text-slate-900 dark:text-zinc-100 text-sm">DaPros</span>
-                          <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-100/80 dark:bg-emerald-900/40 px-2 py-0.5 rounded-full">Dapros mkt</span>
-                        </div>
-                        <p className="text-xs text-slate-600 dark:text-zinc-300 font-medium mt-0.5">Diseño Web · Marketing · Soluciones Digitales</p>
-                      </div>
-                    </div>
-                    <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-white/80 dark:bg-zinc-800/80 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800/50 shadow-sm shrink-0">
-                      dapros.com.mx
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 pt-3 border-t border-emerald-200/60 dark:border-emerald-800/30 text-xs text-slate-600 dark:text-zinc-400">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-slate-700 dark:text-zinc-300">Contacto:</span>
-                      <span>Emmanuel Padilla, Founder</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-slate-700 dark:text-zinc-300">Tel:</span>
-                      <a href="tel:+523331849546" className="text-emerald-600 dark:text-emerald-400 hover:underline">+52 33 3184 9546</a>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-slate-700 dark:text-zinc-300">Email:</span>
-                      <a href="mailto:contacto@dapros.com.mx" className="text-emerald-600 dark:text-emerald-400 hover:underline">contacto@dapros.com.mx</a>
-                    </div>
-                    <div className="flex items-center gap-1.5 truncate">
-                      <span className="font-semibold text-slate-700 dark:text-zinc-300">Ubicación:</span>
-                      <span className="truncate" title="Av. Chapultepec Sur 15, Americana, 44600 Guadalajara, Jal.">Av. Chapultepec Sur 15, Guadalajara</span>
-                    </div>
-                  </div>
-                </div>
-
                 {/* Status */}
                 <div>
                   <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-2">Status</p>
@@ -1026,6 +1148,8 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
                 {/* Meta */}
                 <div className="grid grid-cols-2 gap-3">
                   {[
+                    { label: "Sales Representative", value: previewQuote.salesperson_name || "Account Owner" },
+                    { label: "Deals Pipeline", value: previewQuote.deal_stage || "Negotiation" },
                     { label: "Valid Until", value: previewQuote.valid_until || "—" },
                     { label: "Currency", value: previewQuote.currency || "MXN" },
                     { label: "Created", value: new Date(previewQuote.created_at).toLocaleDateString("en-IN") },
@@ -1038,13 +1162,31 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
                   ))}
                 </div>
 
+                {/* Live Public Link */}
+                {previewQuote.public_uuid && (
+                  <div className="p-3.5 rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 dark:from-zinc-800/80 dark:to-zinc-800/80 border border-amber-200 dark:border-amber-900/40 flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <p className="text-xs font-bold text-amber-950 dark:text-amber-200">Interactive Web Proposal / Quote</p>
+                      <p className="text-[11px] text-slate-500 dark:text-zinc-400">Clients can view, approve, and sign digitally</p>
+                    </div>
+                    <a
+                      href={`/p/${previewQuote.public_uuid}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-sm transition-colors"
+                    >
+                      <Link2 className="w-3.5 h-3.5" /> View Live <ArrowUpRight className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                )}
+
                 {/* Actions */}
                 <div className="flex gap-3 pt-2">
                   <button onClick={() => setDownloadingQuote(previewQuote)}
                     className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-500 text-white rounded-xl font-semibold text-sm hover:bg-amber-600 transition-colors">
                     <Download className="w-4 h-4" /> Download PDF
                   </button>
-                  <button onClick={() => handleDelete(previewQuote.id)}
+                  <button onClick={() => handleDelete(previewQuote)}
                     className="px-4 py-2.5 bg-red-50 text-red-600 rounded-xl font-semibold text-sm hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 transition-colors">
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -1077,15 +1219,13 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
                   <div className="flex items-center gap-2 text-sm text-slate-400 py-4">
                     <Loader2 className="w-4 h-4 animate-spin" /> Loading email details…
                   </div>
-                ) : emailPreview ? (
+                ) : !emailPreview?.sendable ? (
+                  <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/40">
+                    <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">No email address {pendingSend.client_name || pendingSend.lead_name ? `for ${pendingSend.client_name || pendingSend.lead_name}` : "on the linked lead/client"}.</p>
+                    <p className="text-xs text-amber-600/70 dark:text-amber-500/70 mt-1">{pendingSend.client_name || pendingSend.lead_name ? `Add an email to ${pendingSend.client_name || pendingSend.lead_name} to send the quote by email.` : "Add an email to the linked lead/client to send the quote by email."} You can still mark it as Sent.</p>
+                  </div>
+                ) : (
                   <>
-                    {!emailPreview?.recipient_email && (
-                      <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/40">
-                        <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">No email address {pendingSend.client_name || pendingSend.lead_name ? `for ${pendingSend.client_name || pendingSend.lead_name}` : "on the linked lead/client"}.</p>
-                        <p className="text-xs text-amber-600/70 dark:text-amber-500/70 mt-1">Enter one below to send the quote by email, or just mark it as Sent.</p>
-                      </div>
-                    )}
-
                     {/* From / To */}
                     <div className="grid grid-cols-2 gap-3">
                       <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-800/50 border border-slate-200 dark:border-zinc-700">
@@ -1102,13 +1242,8 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
                         <p className="text-sm font-bold text-slate-900 dark:text-zinc-100">
                           {emailPreview.recipient_name || emailPreview.company_name || pendingSend.client_name || pendingSend.lead_name || "Recipient"}
                         </p>
-                        <input
-                          value={manualRecipientEmail}
-                          onChange={e => setManualRecipientEmail(e.target.value)}
-                          placeholder="recipient@example.com"
-                          className="mt-1 w-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 dark:text-zinc-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500" />
-                        {!manualRecipientEmail.trim() && !emailPreview.recipient_email && (
-                          <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">Type an email to enable sending.</p>
+                        {emailPreview.recipient_email && (
+                          <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">{emailPreview.recipient_email}</p>
                         )}
                       </div>
                     </div>
@@ -1151,14 +1286,14 @@ const QuotesPage = forwardRef<QuotesHandle, { embedded?: boolean }>(function Quo
                       )}
                     </div>
                   </>
-                ) : null}
+                )}
               </div>
               <div className="flex gap-3 px-6 py-4 border-t border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-900/50 rounded-b-2xl">
                 <button onClick={markSentOnly} disabled={sendingEmail}
                   className="flex-1 py-2.5 rounded-xl bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 font-semibold text-sm hover:bg-slate-100 transition-all disabled:opacity-40">
                   Mark Sent Only
                 </button>
-                <button onClick={sendEmailAndMarkSent} disabled={sendingEmail || emailPreviewLoading || !emailPreview?.from_email || (!emailPreview?.recipient_email && !manualRecipientEmail.trim())}
+                <button onClick={sendEmailAndMarkSent} disabled={sendingEmail || emailPreviewLoading || !emailPreview?.sendable}
                   className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-white font-semibold text-sm hover:opacity-90 disabled:opacity-40 transition-all flex items-center justify-center gap-2 shadow-md">
                   {sendingEmail && <Loader2 className="w-4 h-4 animate-spin" />}
                   {sendingEmail ? "Sending…" : "Confirm & Send"}

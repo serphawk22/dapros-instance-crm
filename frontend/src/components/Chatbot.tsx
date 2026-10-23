@@ -26,22 +26,22 @@ const QUICK_ACTIONS: QuickAction[] = [
 
 const ROLE_ROUTES: Record<string, Array<{ label: string; route: string }>> = {
   Admin: [
-    { label: 'Dashboard', route: '/' }, { label: 'Leads', route: '/leads' }, { label: 'Contacts', route: '/contacts' }, { label: 'Clients', route: '/clients' }, { label: 'Deals', route: '/pipeline' }, { label: 'Projects', route: '/projects' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Reports', route: '/reports' }, { label: 'Meetings', route: '/meetings' }, { label: 'Calls', route: '/calls' }, { label: 'Team Directory', route: '/teams' }, { label: 'Leaderboard', route: '/admin/leaderboard' }, { label: 'Email Agent', route: '/email-agent' }, { label: 'Cases', route: '/support/cases' },
+    { label: 'Dashboard', route: '/' }, { label: 'Leads', route: '/leads' }, { label: 'Contacts', route: '/contacts' }, { label: 'Clients', route: '/clients' }, { label: 'Deals', route: '/pipeline' }, { label: 'Projects', route: '/projects' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Reports', route: '/reports' }, { label: 'Meetings', route: '/meetings' }, { label: 'Calls', route: '/calls' }, { label: 'Team Directory', route: '/teams' }, { label: 'Leaderboard', route: '/admin/leaderboard' }, { label: 'Email Agent', route: '/email-agent' }, { label: 'Cases', route: 'https://projecthub.serphawk.in/client/login' },
   ],
   SuperAdmin: [
-    { label: 'Dashboard', route: '/' }, { label: 'Leads', route: '/leads' }, { label: 'Contacts', route: '/contacts' }, { label: 'Clients', route: '/clients' }, { label: 'Deals', route: '/pipeline' }, { label: 'Projects', route: '/projects' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Reports', route: '/reports' }, { label: 'Meetings', route: '/meetings' }, { label: 'Calls', route: '/calls' }, { label: 'Team Directory', route: '/teams' }, { label: 'Leaderboard', route: '/admin/leaderboard' }, { label: 'Email Agent', route: '/email-agent' }, { label: 'Cases', route: '/support/cases' },
+    { label: 'Dashboard', route: '/' }, { label: 'Leads', route: '/leads' }, { label: 'Contacts', route: '/contacts' }, { label: 'Clients', route: '/clients' }, { label: 'Deals', route: '/pipeline' }, { label: 'Projects', route: '/projects' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Reports', route: '/reports' }, { label: 'Meetings', route: '/meetings' }, { label: 'Calls', route: '/calls' }, { label: 'Team Directory', route: '/teams' }, { label: 'Leaderboard', route: '/admin/leaderboard' }, { label: 'Email Agent', route: '/email-agent' }, { label: 'Cases', route: 'https://projecthub.serphawk.in/client/login' },
   ],
   SalesManager: [
-    { label: 'Dashboard', route: '/' }, { label: 'Leads', route: '/leads' }, { label: 'Contacts', route: '/contacts' }, { label: 'Clients', route: '/clients' }, { label: 'Deals', route: '/pipeline' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Meetings', route: '/meetings' }, { label: 'Calls', route: '/calls' }, { label: 'Leaderboard', route: '/admin/leaderboard' }, { label: 'Email Agent', route: '/email-agent' }, { label: 'Cases', route: '/support/cases' },
+    { label: 'Dashboard', route: '/' }, { label: 'Leads', route: '/leads' }, { label: 'Contacts', route: '/contacts' }, { label: 'Clients', route: '/clients' }, { label: 'Deals', route: '/pipeline' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Meetings', route: '/meetings' }, { label: 'Calls', route: '/calls' }, { label: 'Leaderboard', route: '/admin/leaderboard' }, { label: 'Email Agent', route: '/email-agent' }, { label: 'Cases', route: 'https://projecthub.serphawk.in/client/login' },
   ],
   ProjectMember: [
-    { label: 'Dashboard', route: '/' }, { label: 'Projects', route: '/projects' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Cases', route: '/support/cases' },
+    { label: 'Dashboard', route: '/' }, { label: 'Projects', route: '/projects' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Cases', route: 'https://projecthub.serphawk.in/client/login' },
   ],
   Developer: [
-    { label: 'Dashboard', route: '/' }, { label: 'Projects', route: '/projects' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Cases', route: '/support/cases' },
+    { label: 'Dashboard', route: '/' }, { label: 'Projects', route: '/projects' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Cases', route: 'https://projecthub.serphawk.in/client/login' },
   ],
   Employee: [
-    { label: 'Dashboard', route: '/' }, { label: 'Projects', route: '/projects' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Email Agent', route: '/email-agent' }, { label: 'Cases', route: '/support/cases' },
+    { label: 'Dashboard', route: '/' }, { label: 'Projects', route: '/projects' }, { label: 'Task Sheet', route: '/task-sheet' }, { label: 'Email Agent', route: '/email-agent' }, { label: 'Cases', route: 'https://projecthub.serphawk.in/client/login' },
   ],
 };
 

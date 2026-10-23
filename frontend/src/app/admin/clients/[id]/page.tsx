@@ -1,16 +1,18 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Activity, MessageSquare, StickyNote, Building2, ChevronDown,
   Target, HeartPulse, LayoutDashboard, Users,
-  TrendingUp, TrendingDown, Lightbulb, ShieldAlert, DollarSign, Zap, Star, Mail, Clock, Ticket, Globe, Navigation, Store, Tag, Phone, X, FileText, Send, Search, Filter, Check, Smartphone, Calendar, AlertCircle, ArrowUpRight, Copy, Brain, Loader2, Radar, CalendarClock
+  TrendingUp, TrendingDown, Lightbulb, ShieldAlert, IndianRupee, Zap, Star, Mail, Clock, Ticket, Globe, Navigation, Store, Tag, Phone, X, FileText, Send, Search, Filter, Check, Smartphone, Calendar, AlertCircle, ArrowUpRight, Copy, Brain, Loader2, Radar, UserX, CalendarClock
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ResultCard } from '@/components/email-agent/ResultCard';
+import DropClientModal from '@/components/DropClientModal';
 
 import { API_BASE_URL } from '@/config';
 import { useRole } from '@/context/RoleContext';
@@ -98,10 +100,102 @@ function CollapsibleSection({ title, icon: Icon, count, defaultOpen = false, acc
   );
 }
 
+// ─── Deal / proposal badges (client overview) ────────────────────────────────
+type OverviewDeal = {
+  id: number;
+  title?: string | null;
+  value?: number | null;
+  final_value?: number | null;
+  currency?: string | null;
+  stage?: string | null;
+  expected_close_date?: string | null;
+  assigned_name?: string | null;
+};
+
+type OverviewProposal = {
+  id: number;
+  title?: string | null;
+  status?: string | null;
+  deal_id?: number | null;
+  total_value?: number | null;
+  currency?: string | null;
+};
+
+const STAGE_BADGE: Record<string, { bg: string; color: string }> = {
+  'Lead':        { bg: '#eef2ff', color: '#4f46e5' },
+  'Discovery':   { bg: '#e0f2fe', color: '#0284c7' },
+  'Demo':        { bg: '#f5f3ff', color: '#7c3aed' },
+  'Negotiation': { bg: '#fffbeb', color: '#d97706' },
+  'Closed Won':  { bg: '#d1fae5', color: '#059669' },
+  'Closed Lost': { bg: '#fee2e2', color: '#dc2626' },
+};
+
+const PROPOSAL_STATUS_BADGE: Record<string, { bg: string; color: string }> = {
+  'Draft':           { bg: '#f1f5f9', color: '#475569' },
+  'Sent':            { bg: '#e0f2fe', color: '#0284c7' },
+  'In Review':       { bg: '#e0f2fe', color: '#0284c7' },
+  'Demo Requested':  { bg: '#fffbeb', color: '#d97706' },
+  'Negotiation':     { bg: '#fffbeb', color: '#d97706' },
+  'Accepted':        { bg: '#d1fae5', color: '#059669' },
+  'Signed':          { bg: '#d1fae5', color: '#059669' },
+  'Rejected':        { bg: '#fee2e2', color: '#dc2626' },
+};
+
+const CUR_SYMBOLS: Record<string, string> = { USD: '₹', MXN: '₹', COP: '₹', EUR: '€', GBP: '£', INR: '₹', BRL: '₹' };
+
+function overviewMoney(value: number | null | undefined, currency?: string | null) {
+  const n = Number(value || 0);
+  const code = String(currency || '').toUpperCase();
+  const sym = CUR_SYMBOLS[code] || (code ? `${code} ` : '₹');
+  return `${sym}${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+}
+
+function Badge({ label, bg, color }: { label: string; bg: string; color: string }) {
+  return (
+    <span style={{ background: bg, color, borderRadius: 999, padding: '2px 9px', fontSize: 10, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase' as const, whiteSpace: 'nowrap' }}>
+      {label}
+    </span>
+  );
+}
+
 // ─── Overview Tab — premium light ──────────────────────────────────────────
-function OverviewTab({ client, employees, serviceRequests, activities, timeline, research, notes, conversations, clientId, onNotesRefresh, onConversationsRefresh, emails, onRefresh, onActivitySelect }: any) {
+function OverviewTab({ client, employees, serviceRequests, activities, timeline, research, notes, conversations, clientId, onNotesRefresh, onConversationsRefresh, emails, onRefresh, onActivitySelect, onDropClient, onViewDropDetails }: any) {
   const { t, language } = useLanguage();
   const recentActivities = (activities || []).slice(0, 8);
+
+  // ── Deals & Proposals (client overview) ─────────────────────────────────
+  const [deals, setDeals] = useState<OverviewDeal[]>([]);
+  const [clientProposals, setClientProposals] = useState<OverviewProposal[]>([]);
+  const [dealsLoaded, setDealsLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!clientId) return;
+    let cancelled = false;
+    const fetchJson = <T,>(url: string, timeoutMs = 12000): Promise<T> => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      return fetch(url, { signal: ctrl.signal })
+        .then(r => (r.ok ? r.json() : ({} as T)))
+        .catch(() => ({} as T))
+        .finally(() => clearTimeout(timer));
+    };
+    (async () => {
+      try {
+        const [dd, pp] = await Promise.all([
+          fetchJson<{ deals?: OverviewDeal[] }>(`${API_BASE_URL}/deals?client_id=${clientId}`),
+          fetchJson<{ proposals?: OverviewProposal[] }>(`${API_BASE_URL}/proposals?client_id=${clientId}`),
+        ]);
+        if (cancelled) return;
+        setDeals(Array.isArray(dd.deals) ? dd.deals : []);
+        setClientProposals(Array.isArray(pp.proposals) ? pp.proposals : []);
+      } catch {
+        /* ignore — section simply stays empty */
+      } finally {
+        if (!cancelled) setDealsLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [clientId]);
 
   // ── Add Note ────────────────────────────────────────────────────────────
   const [noteText, setNoteText] = useState('');
@@ -159,6 +253,176 @@ function OverviewTab({ client, employees, serviceRequests, activities, timeline,
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' as const, gap: 14, background: 'var(--bg-secondary)', minHeight: '100%' }}>
+
+      {/* Dropped Client Banner */}
+      {client?.status === 'Dropped' ? (
+        <div className="p-5 rounded-2xl bg-gradient-to-r from-rose-50 to-red-50 dark:from-rose-950/40 dark:to-red-950/20 border border-rose-200 dark:border-rose-900/50 shadow-sm flex items-start gap-4">
+          <div className="p-3 rounded-xl bg-rose-500 text-white shadow-md shadow-rose-500/20 shrink-0 mt-0.5">
+            <UserX size={20} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-wider text-rose-600 dark:text-rose-400 bg-rose-100 dark:bg-rose-900/50 px-2 py-0.5 rounded-md">
+                  Discontinued Relationship
+                </span>
+                <h3 className="text-base font-bold text-slate-900 dark:text-zinc-100 mt-1">
+                  This client is currently marked as Dropped
+                </h3>
+              </div>
+              <div className="flex items-center gap-2">
+                {onViewDropDetails && (
+                  <button
+                    type="button"
+                    onClick={onViewDropDetails}
+                    className="px-3.5 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border border-rose-200 dark:border-rose-900/40 text-rose-700 dark:text-rose-300 text-xs font-bold hover:bg-rose-50 dark:hover:bg-zinc-700 transition-all shadow-sm"
+                  >
+                    View Drop Reason & Details
+                  </button>
+                )}
+              </div>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-zinc-400 mt-1.5 leading-relaxed">
+              Loss retention records are preserved for historical reporting and reactivation targeting. You can view recorded reasons or reactivate this client anytime.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 flex items-center justify-between gap-4 flex-wrap shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 flex items-center justify-center font-black text-xs">
+              ✓
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-800 dark:text-zinc-200">
+                Relationship Status: <span className="text-emerald-600 font-black">Active Client</span>
+              </p>
+              <p className="text-[11px] text-slate-400">
+                If this client cancels or discontinues services, mark them as dropped to record reasons.
+              </p>
+            </div>
+          </div>
+          {onDropClient && (
+            <button
+              type="button"
+              onClick={onDropClient}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/30 dark:hover:bg-rose-900/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/50 text-xs font-bold transition-all shadow-sm active:scale-95"
+            >
+              <UserX size={14} className="text-rose-500" />
+              <span>Client is Dropped</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Commercial Deals & Proposals Card ───────────────────────────────── */}
+      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 18, padding: '16px 20px', backdropFilter: 'blur(16px)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ background: '#3b82f6', borderRadius: 8, padding: '4px 7px', display: 'flex' }}>
+              <FileText size={13} color="#fff" />
+            </div>
+            <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-primary)' }}>
+              Commercial Deals &amp; Proposals
+            </span>
+            <span style={{ fontSize: 10, fontWeight: 800, padding: '1px 8px', borderRadius: 999, background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6' }}>
+              {clientProposals.length} Proposals · {deals.length} Deals
+            </span>
+          </div>
+          <Link
+            href={`/proposals?new=true&client_id=${clientId}`}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-sm active:scale-95"
+          >
+            <FileText size={13} />
+            <span>+ Create Proposal</span>
+          </Link>
+        </div>
+
+        {/* Proposals List */}
+        {clientProposals.length > 0 ? (
+          <div className="space-y-2 mb-4">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Proposals &amp; Quotes</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {clientProposals.map((prop: any) => {
+                const badge = PROPOSAL_STATUS_BADGE[prop.status] || { bg: '#f1f5f9', color: '#475569' };
+                const inrVal = prop.total_value || 0;
+                return (
+                  <div key={prop.id} className="p-3 rounded-xl border border-slate-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center justify-between gap-3 hover:border-blue-300 transition-colors">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">{prop.title || `Proposal #${prop.id}`}</p>
+                        <span style={{ background: badge.bg, color: badge.color }} className="text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase shrink-0">
+                          {prop.status || 'Draft'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        <strong className="text-blue-600 font-bold">₹{inrVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} INR</strong>
+                      </p>
+                    </div>
+                    {prop.public_uuid && (
+                      <a
+                        href={`/p/${prop.public_uuid}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-bold text-blue-600 hover:text-blue-700 bg-blue-50 dark:bg-blue-950/40 px-2.5 py-1 rounded-lg shrink-0"
+                      >
+                        View ↗
+                      </a>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Pipeline Deals */}
+        {deals.length > 0 ? (
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Linked Pipeline Opportunities</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {deals.map((deal: any) => {
+                const sBadge = STAGE_BADGE[deal.stage] || { bg: '#f1f5f9', color: '#475569' };
+                const usd = deal.value || 0;
+                const inr = usd * 83.5;
+                return (
+                  <div key={deal.id} className="p-3 rounded-xl border border-slate-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">{deal.title}</p>
+                        <span style={{ background: sBadge.bg, color: sBadge.color }} className="text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase shrink-0">
+                          {deal.stage || 'Negotiation'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        <strong className="text-indigo-600 font-bold">₹{usd.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} INR</strong>
+                        {' · '}
+                        <span className="text-slate-400">₹{inr.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} INR</span>
+                      </p>
+                    </div>
+                    <Link href="/pipeline" className="text-xs font-semibold text-slate-400 hover:text-indigo-600 shrink-0">
+                      Pipeline →
+                    </Link>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {clientProposals.length === 0 && deals.length === 0 && (
+          <div className="text-center py-6">
+            <p className="text-xs text-slate-400 mb-2">No commercial proposals or deals created yet for this client.</p>
+            <Link
+              href={`/proposals?new=true&client_id=${clientId}`}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition-colors"
+            >
+              <FileText size={13} />
+              <span>Create First Proposal</span>
+            </Link>
+          </div>
+        )}
+      </div>
 
       {/* Company Overview */}
       {research?.company_overview && (
@@ -226,6 +490,91 @@ function OverviewTab({ client, employees, serviceRequests, activities, timeline,
           );
         }
         return null;
+      })()}
+
+      {/* ── Deals & Proposals ─────────────────────────────────────────── */}
+      {dealsLoaded && (deals.length > 0 || clientProposals.length > 0) && (() => {
+        const dealIds = new Set(deals.map((d: OverviewDeal) => d.id));
+        const directProposals = clientProposals.filter((p: OverviewProposal) => !p.deal_id || !dealIds.has(p.deal_id));
+        return (
+          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 18, padding: '16px 20px', backdropFilter: 'blur(16px)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+              <div style={{ background: 'var(--accent)', borderRadius: 8, padding: '4px 7px', display: 'flex' }}><Target size={13} color="#fff" /></div>
+              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: 'var(--text-primary)' }}>Deals &amp; Proposals</span>
+              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)', fontWeight: 700 }}>
+                {deals.length} {deals.length === 1 ? 'deal' : 'deals'} · {clientProposals.length} {clientProposals.length === 1 ? 'proposal' : 'proposals'}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {deals.map((d: OverviewDeal) => {
+                const dealProposals = clientProposals.filter((p: OverviewProposal) => p.deal_id === d.id);
+                const stage = STAGE_BADGE[d.stage || ''] || { bg: 'var(--bg-hover)', color: 'var(--text-secondary)' };
+                return (
+                  <div key={`deal-${d.id}`} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 13.5, fontWeight: 800, color: 'var(--text-primary)' }}>{d.title || `Deal #${d.id}`}</span>
+                      <Badge label={d.stage || 'Lead'} bg={stage.bg} color={stage.color} />
+                      <span style={{ marginLeft: 'auto', fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>
+                        {overviewMoney(d.final_value ?? d.value, d.currency)}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 6, fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>
+                      {d.expected_close_date && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><Calendar size={11} /> Close {d.expected_close_date}</span>}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><FileText size={11} /> {dealProposals.length} {dealProposals.length === 1 ? 'proposal' : 'proposals'}</span>
+                      {d.assigned_name && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><Users size={11} /> {d.assigned_name}</span>}
+                    </div>
+
+                    {dealProposals.length > 0 && (
+                      <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed var(--border)', display: 'flex', flexDirection: 'column', gap: 7 }}>
+                        {dealProposals.map((p: OverviewProposal) => {
+                          const st = PROPOSAL_STATUS_BADGE[p.status || ''] || { bg: 'var(--bg-hover)', color: 'var(--text-secondary)' };
+                          return (
+                            <div key={`prop-${p.id}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+                              <FileText size={13} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+                              <span style={{ color: 'var(--text-primary)', fontWeight: 700, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title || `Proposal #${p.id}`}</span>
+                              <Badge label={p.status || 'Draft'} bg={st.bg} color={st.color} />
+                              <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                                {overviewMoney(p.total_value, p.currency)}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {dealProposals.length === 0 && (
+                      <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>No proposals linked to this deal yet</div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {directProposals.length > 0 && (
+                <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase' as const, color: 'var(--text-muted)' }}>Direct Proposals</span>
+                    <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)', fontWeight: 700 }}>{directProposals.length}</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    {directProposals.map((p: OverviewProposal) => {
+                      const st = PROPOSAL_STATUS_BADGE[p.status || ''] || { bg: 'var(--bg-hover)', color: 'var(--text-secondary)' };
+                      return (
+                        <div key={`direct-${p.id}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+                          <FileText size={13} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+                          <span style={{ color: 'var(--text-primary)', fontWeight: 700, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title || `Proposal #${p.id}`}</span>
+                          <Badge label={p.status || 'Draft'} bg={st.bg} color={st.color} />
+                          <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                            {overviewMoney(p.total_value, p.currency)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
       })()}
 
       {/* ── Services Offered ──────────────────────────────────────────── */}
@@ -724,6 +1073,8 @@ export default function AdminClientDetailPage() {
   const [isCreateUserOpen, setIsCreateUserOpen] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ name: '', email: '', role: 'SalesManager', password: 'password123' });
   const [selectedActivity, setSelectedActivity] = useState<any>(null);
+  const [isDropModalOpen, setIsDropModalOpen] = useState(false);
+  const [dropModalMode, setDropModalMode] = useState<'drop' | 'view'>('drop');
 
   // Force light theme always — no dark mode on this page
   useEffect(() => {
@@ -749,10 +1100,24 @@ export default function AdminClientDetailPage() {
 
   const fetchAll = useCallback(async () => {
     if (!id) return;
+    const fetchJson = (url: string, timeoutMs = 15000) => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      return fetch(url, { signal: ctrl.signal })
+        .then(r => { if (!r.ok) throw new Error(`Fetch failed for ${url}`); return r.json(); })
+        .finally(() => clearTimeout(timer));
+    };
+
+    // Core record first so the page shell renders immediately; remaining
+    // sections fill in behind it instead of blocking on one slow request.
     try {
-      const fetchJson = (url: string) => fetch(url).then(r => { if (!r.ok) throw new Error(`Fetch failed for ${url}`); return r.json(); });
-      const [clientRes, empRes, actRes, emailRes, svcRes, tlRes, notesRes, convRes, researchRes] = await Promise.allSettled([
-        fetchJson(`${API_BASE_URL}/clients/${id}`),
+      const clientRes = await fetchJson(`${API_BASE_URL}/clients/${id}`);
+      setClient(clientRes.client || clientRes);
+    } catch (e) { console.error(e); }
+    setPageLoading(false);
+
+    try {
+      const [empRes, actRes, emailRes, svcRes, tlRes, notesRes, convRes, researchRes] = await Promise.allSettled([
         fetchJson(`${API_BASE_URL}/users`),
         fetchJson(`${API_BASE_URL}/clients/${id}/activities`),
         fetchJson(`${API_BASE_URL}/clients/${id}/emails`),
@@ -763,7 +1128,6 @@ export default function AdminClientDetailPage() {
         fetchJson(`${API_BASE_URL}/clients/${id}/research`),
       ]);
 
-      if (clientRes.status === 'fulfilled') setClient(clientRes.value.client || clientRes.value);
       if (empRes.status === 'fulfilled') setEmployees(empRes.value.users || []);
       if (actRes.status === 'fulfilled') setActivities(actRes.value.activities || []);
       if (emailRes.status === 'fulfilled') setEmails(emailRes.value.emails || []);
@@ -773,7 +1137,6 @@ export default function AdminClientDetailPage() {
       if (convRes.status === 'fulfilled') setConversations(convRes.value.conversations || []);
       if (researchRes.status === 'fulfilled') setResearch(researchRes.value.research || null);
     } catch (e) { console.error(e); }
-    finally { setPageLoading(false); }
   }, [id]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
@@ -913,8 +1276,11 @@ export default function AdminClientDetailPage() {
         onScheduleMeeting={() => router.push('/meetings')}
         onSendEmail={() => switchTab('email')}
         onCreateOpportunity={() => {}}
+        onDropClient={() => { setDropModalMode('drop'); setIsDropModalOpen(true); }}
+        onViewDropDetails={() => { setDropModalMode('view'); setIsDropModalOpen(true); }}
         darkMode={darkMode}
         onToggleDarkMode={toggleDarkMode}
+        onStatusChange={(newStatus) => setClient((prev: any) => ({ ...prev, status: newStatus }))}
       />
 
       {/* ── Full-Width layout ──────────────────────────────────────── */}
@@ -976,6 +1342,8 @@ export default function AdminClientDetailPage() {
                     onConversationsRefresh={() => fetch(`${API_BASE_URL}/clients/${id}/conversations`).then(async r => { if (!r.ok) throw new Error(); return r.json(); }).then(d => setConversations(d.conversations || []))}
                     onActivitySelect={setSelectedActivity}
                     onRefresh={fetchClient}
+                    onDropClient={() => { setDropModalMode('drop'); setIsDropModalOpen(true); }}
+                    onViewDropDetails={() => { setDropModalMode('view'); setIsDropModalOpen(true); }}
                   />
                 )}
                 {activeTab === 'ai_data' && (
@@ -1029,7 +1397,7 @@ export default function AdminClientDetailPage() {
             <AiCopilotPanel clientId={id} client={client} />
 
             {/* Assign Salesperson Card */}
-            {role === 'Admin' && (
+            {role === 'Admin' ? (
               <div className="rounded-2xl border border-slate-200 dark:border-zinc-700  bg-white dark:bg-zinc-900  p-4 shadow-sm">
                 <p className="text-xs font-black uppercase tracking-wider text-slate-400  mb-3">{language === 'es' ? 'Asignar Vendedor' : 'Assign Salesperson'}</p>
                 <select
@@ -1060,6 +1428,21 @@ export default function AdminClientDetailPage() {
                     <option key={e.id} value={e.id}>{e.name} — {e.role}</option>
                   ))}
                 </select>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4 shadow-sm">
+                <p className="text-xs font-black uppercase tracking-wider text-slate-400 mb-2">Assigned Account Representative</p>
+                <div className="flex items-center gap-2.5 px-3 py-2.5 bg-slate-50 dark:bg-zinc-800/60 rounded-xl border border-slate-100 dark:border-zinc-700">
+                  <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-black flex-shrink-0">
+                    {(employees.find((e: any) => String(e.id) === String(client?.assignedEmployeeId))?.name || user?.name || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                      {employees.find((e: any) => String(e.id) === String(client?.assignedEmployeeId))?.name || user?.name || 'Assigned to You'}
+                    </p>
+                    <p className="text-[10px] text-slate-400">Account Executive</p>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1164,6 +1547,20 @@ export default function AdminClientDetailPage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* ── Drop Client Modal ────────────────────────────────────────── */}
+      {client && (
+        <DropClientModal
+          isOpen={isDropModalOpen}
+          onClose={() => setIsDropModalOpen(false)}
+          client={client}
+          mode={dropModalMode}
+          onSuccess={() => {
+            fetchAll();
+            setIsDropModalOpen(false);
+          }}
+        />
+      )}
 
     </div>
   );

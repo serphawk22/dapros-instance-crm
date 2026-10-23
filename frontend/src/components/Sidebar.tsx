@@ -8,7 +8,7 @@ import {
   Zap, LayoutList, Globe, BarChart2, Activity, FileText, FileEdit, ShoppingBag, Settings,
   Moon, Sun, ChevronDown, ChevronRight, Search, PanelLeftClose, PanelLeftOpen, Calendar,
   Phone, Package, ShoppingCart, Truck, HeadphonesIcon, BookOpen, FileBarChart2, Briefcase, Edit2, GripVertical, Check,
-  Cloud, Trophy, Star, Inbox, CalendarClock
+  Cloud, Trophy, Star, Inbox, CalendarClock, UserX, TrendingDown, TrendingUp, IndianRupee
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRole, Role } from "@/context/RoleContext";
@@ -43,7 +43,8 @@ const iconMap: Record<string, any> = {
   LayoutDashboard, Bell, Users, FolderOpen, CheckSquare, CheckCircle, Radar, Mail,
   Zap, LayoutList, Globe, BarChart2, Activity, FileText, FileEdit, ShoppingBag, Settings,
   Moon, Sun, ChevronDown, ChevronRight, Search, PanelLeftClose, PanelLeftOpen, Calendar,
-  Phone, Package, ShoppingCart, Truck, HeadphonesIcon, BookOpen, FileBarChart2, Briefcase, Cloud, Trophy, Star, Inbox, CalendarClock
+  Phone, Package, ShoppingCart, Truck, HeadphonesIcon, BookOpen, FileBarChart2, Briefcase, Cloud, Trophy, Star, Inbox, CalendarClock, UserX,
+  TrendingDown, TrendingUp, IndianRupee
 };
 
 // Roles that can open /inbox (routers/inbox.py enforces the same list server-side).
@@ -67,7 +68,6 @@ const defaultSidebarSections = [
       { id: "item-work-queue", name: "My Work Queue", icon: "LayoutList", href: "/work-queue", roles: ["Admin", "Demo", "SalesManager", "Employee", "ProjectMember", "Intern", "Developer"] },
       { id: "item-notifications", name: "Notifications", icon: "Bell", href: "/notifications", roles: ["Admin", "Demo", "SalesManager", "Employee"] },
       { id: "item-inbox", name: "Inbox", icon: "Inbox", href: "/inbox", roles: ["Admin", "Demo", "SalesManager", "Employee"] },
-      { id: "item-followups", name: "Follow-ups", icon: "CalendarClock", href: "/followups", roles: ["Admin", "Demo", "SalesManager", "Employee"] },
     ],
   },
   {
@@ -77,16 +77,16 @@ const defaultSidebarSections = [
       { id: "item-leads", name: "Leads", icon: "Radar", href: "/leads", roles: ["Admin", "SalesManager", "Demo"] },
       { id: "item-contacts", name: "Contacts", icon: "Users", href: "/contacts", roles: ["Admin", "SalesManager", "Demo"] },
       { id: "item-clients", name: "Clients", icon: "CheckCircle", href: "/clients", roles: ["Admin", "SalesManager", "Demo"] },
-      { id: "item-deals", name: "Deals", icon: "Briefcase", href: "/pipeline", roles: ["Admin", "SalesManager", "Demo"] },
+      { id: "item-dropped-clients", name: "Dropped Clients", icon: "UserX", href: "/dropped-clients", roles: ["Admin", "SalesManager", "Demo", "Employee"] },
     ],
   },
   {
     id: "section-projects",
-    heading: "PROJECTS & ACTIVITIES",
+    heading: "ACTIVITIES",
     items: [
-      { id: "item-projects", name: "Projects", icon: "FolderOpen", href: "/projects", roles: ["Admin", "Employee", "Intern", "ProjectMember", "Demo"] },
       { id: "item-task-sheet", name: "Task Sheet", icon: "FileBarChart2", href: "/task-sheet", roles: ["Admin", "Employee", "SalesManager", "ProjectMember", "Intern", "Demo"] },
       { id: "item-reports", name: "Reports", icon: "BarChart2", href: "/reports", roles: ["Admin", "SalesManager", "Demo"] },
+      { id: "item-follow-ups", name: "Follow-ups", icon: "CalendarClock", href: "/follow-ups", roles: ["Admin", "Employee", "SalesManager", "Demo"] },
       { id: "item-meetings", name: "Meetings", icon: "Calendar", href: "/meetings", roles: ["Admin", "SalesManager", "Demo"] },
       { id: "item-calls", name: "Calls", icon: "Phone", href: "/calls", roles: ["Admin", "SalesManager", "Demo"] },
     ],
@@ -120,8 +120,17 @@ const defaultSidebarSections = [
     id: "section-support",
     heading: "SUPPORT",
     items: [
-      { id: "item-cases", name: "Cases", icon: "HeadphonesIcon", href: "/support/cases", roles: ["Admin", "SalesManager", "Demo"] },
+      { id: "item-cases", name: "Cases", icon: "HeadphonesIcon", href: "https://projecthub.serphawk.in/client/login", roles: ["Admin", "Employee", "SalesManager", "ProjectMember", "Demo"] },
       { id: "item-solutions", name: "Solutions", icon: "BookOpen", href: "/support/solutions", roles: ["Admin", "SalesManager", "Demo"] },
+    ],
+  },
+  {
+    id: "section-finance",
+    heading: "FINANCE",
+    items: [
+      { id: "item-revenue", name: "Revenue Dashboard", icon: "TrendingUp", href: "/revenue", roles: ["Admin"] },
+      { id: "item-business-costs", name: "Business Costs", icon: "IndianRupee", href: "/business-costs", roles: ["Admin"] },
+      { id: "item-lead-source-analytics", name: "Lead Source Analytics", icon: "BarChart2", href: "/lead-source-analytics", roles: ["Admin", "SalesManager", "Demo"] },
     ],
   },
 ];
@@ -241,6 +250,8 @@ function SortableSection({ section, role, pathname, collapsed, isEditMode, onRen
                   <Link
                     key={item.href}
                     href={item.href}
+                    target={item.href?.startsWith("http") ? "_blank" : undefined}
+                    rel={item.href?.startsWith("http") ? "noopener noreferrer" : undefined}
                     className={cn(
                       "relative group flex items-center gap-2 rounded-[8px] transition-all duration-150 select-none shrink-0",
                       collapsed ? "w-9 h-9 justify-center mx-auto" : "py-[4px] px-2 h-[28px]",
@@ -770,6 +781,8 @@ export function Sidebar({ role }: SidebarProps) {
                     <Link
                       key={`fav-${item.id}-${item.href}`}
                       href={item.href}
+                      target={item.href?.startsWith("http") ? "_blank" : undefined}
+                      rel={item.href?.startsWith("http") ? "noopener noreferrer" : undefined}
                       className={cn(
                         "relative group flex items-center gap-2 rounded-[8px] transition-all duration-150 select-none shrink-0",
                         collapsed ? "w-9 h-9 justify-center mx-auto" : "py-[4px] px-2 h-[28px]",

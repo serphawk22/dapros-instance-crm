@@ -36,13 +36,13 @@ export default function FollowUpsWidget({ mine = false }: { mine?: boolean }) {
           <CalendarClock className="h-4 w-4 text-indigo-500" />
           <h3 className="text-sm font-bold text-slate-800 dark:text-zinc-100">Follow-ups</h3>
         </div>
-        <Link href="/followups" className="flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
+        <Link href="/follow-ups?tab=email" className="flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
           Open <ArrowRight className="h-3.5 w-3.5" />
         </Link>
       </div>
       <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-4">
         {tiles.map((t) => (
-          <Link key={t.key} href={`/followups?view=${t.view || t.key}`}
+          <Link key={t.key} href={`/follow-ups?tab=email&view=${t.view || t.key}`}
             className="flex items-center gap-3 rounded-xl border border-slate-100 p-3 transition-colors hover:border-indigo-200 hover:bg-indigo-50/40 dark:border-zinc-800 dark:hover:bg-zinc-800/60">
             <div className={`rounded-lg p-2 ${t.tone}`}><t.icon className="h-4 w-4" /></div>
             <div>

@@ -23,6 +23,11 @@ own or clients assigned to them; other roles get 403. Identity is still the X-Us
 
 "Overdue" / "due today" are derived from due_at in the viewer's timezone (tz_offset = JS
 Date.getTimezoneOffset(), minutes), never stored.
+
+The follow_ups table is shared with /follow-ups (routers/follow_ups.py) and uses its columns:
+the JSON keys here map assigned_to -> owner_id, outcome -> completion_note and
+remind_at -> due_at - reminder_minutes; channel / priority are stored capitalised and returned
+lower case.
 """
 import os
 from datetime import date, datetime, timedelta, timezone
@@ -45,7 +50,7 @@ from routers import inbox
 router = APIRouter(tags=["followups"])
 
 CHANNELS = Literal["email", "call", "meeting", "whatsapp", "other"]
-PRIORITIES = Literal["high", "medium", "low"]
+PRIORITIES = Literal["urgent", "high", "medium", "low"]
 INTERNAL_ROLES = {"Admin", "SuperAdmin", "Demo", "SalesManager", "Employee"}
 
 
@@ -72,7 +77,7 @@ def _scope(stmt, v: inbox.Viewer):
         return stmt
     uid = v.user.id
     return stmt.where(or_(
-        FollowUp.assigned_to == uid, FollowUp.created_by == uid,
+        FollowUp.owner_id == uid, FollowUp.created_by == uid,
         FollowUp.lead_id.in_(select(Lead.id).where(Lead.owner_id == uid)),
         FollowUp.client_id.in_(select(ClientProfile.id).where(ClientProfile.assignedEmployeeId == uid)),
     ))
@@ -112,6 +117,8 @@ def _state(fu: FollowUp, start: datetime, end: datetime) -> str:
     if fu.status == core.CANCELLED:
         return "cancelled"
     due = core.as_utc(fu.due_at)
+    if due is None:  # /follow-ups allows a follow-up without a date
+        return "upcoming"
     if due < start:
         return "overdue"
     if due < end:
@@ -140,7 +147,7 @@ def _iso(dt) -> Optional[str]:
 
 
 def _names(session: Session, items: list) -> dict:
-    user_ids = {i for f in items for i in (f.assigned_to, f.created_by, f.completed_by) if i}
+    user_ids = {i for f in items for i in (f.owner_id, f.created_by, f.completed_by) if i}
     lead_ids = {f.lead_id for f in items if f.lead_id}
     client_ids = {f.client_id for f in items if f.client_id}
     users = {u.id: (u.name or u.email) for u in session.exec(select(User).where(User.id.in_(user_ids))).all()} if user_ids else {}
@@ -154,17 +161,17 @@ def _names(session: Session, items: list) -> dict:
 def _dict(f: FollowUp, names: dict, start: datetime, end: datetime) -> dict:
     ref = lambda i, table: {"id": i, "name": names[table].get(i, f"#{i}")} if i else None  # noqa: E731
     return {
-        "id": f.id, "title": f.title, "notes": f.notes, "channel": f.channel, "priority": f.priority,
-        "status": f.status, "state": _state(f, start, end),
-        "due_at": _iso(f.due_at), "remind_at": _iso(f.remind_at),
+        "id": f.id, "title": f.title, "notes": f.notes, "channel": (f.channel or "email").lower(),
+        "priority": (f.priority or "medium").lower(), "status": f.status, "state": _state(f, start, end),
+        "due_at": _iso(f.due_at), "remind_at": _iso(core.remind_time(f)),
         "lead": ref(f.lead_id, "leads"), "client": ref(f.client_id, "clients"),
         "contact_name": f.contact_name, "contact_email": f.contact_email, "company_name": f.company_name,
         "source": f.source, "source_ref": f.source_ref, "ai_reason": f.ai_reason,
-        "assigned_to": ref(f.assigned_to, "users"), "created_by": ref(f.created_by, "users"),
+        "assigned_to": ref(f.owner_id, "users"), "created_by": ref(f.created_by, "users"),
         "email_subject": f.email_subject, "email_body": f.email_body, "auto_send": bool(f.auto_send),
         "email_sent_at": _iso(f.email_sent_at), "sent_email_id": f.sent_email_id, "last_error": f.last_error,
         "reminder_sent_at": _iso(f.reminder_sent_at), "completed_at": _iso(f.completed_at),
-        "completed_by": ref(f.completed_by, "users"), "outcome": f.outcome,
+        "completed_by": ref(f.completed_by, "users"), "outcome": f.completion_note,
         "created_at": _iso(f.created_at), "updated_at": _iso(f.updated_at),
     }
 
@@ -176,14 +183,15 @@ def _serialize(session: Session, items: list, tz_offset: Optional[int]) -> list:
 
 
 def _view_filter(stmt, view: str, start: datetime, end: datetime):
+    is_open = FollowUp.status.in_(core.OPEN_STATUSES)
     if view == "pending":
-        return stmt.where(FollowUp.status == core.OPEN)
+        return stmt.where(is_open)
     if view == "overdue":
-        return stmt.where(FollowUp.status == core.OPEN, FollowUp.due_at < start)
+        return stmt.where(is_open, FollowUp.due_at < start)
     if view == "today":
-        return stmt.where(FollowUp.status == core.OPEN, FollowUp.due_at >= start, FollowUp.due_at < end)
+        return stmt.where(is_open, FollowUp.due_at >= start, FollowUp.due_at < end)
     if view == "upcoming":
-        return stmt.where(FollowUp.status == core.OPEN, FollowUp.due_at >= end)
+        return stmt.where(is_open, or_(FollowUp.due_at >= end, FollowUp.due_at.is_(None)))
     if view == "completed":
         return stmt.where(FollowUp.status == core.DONE)
     if view == "cancelled":
@@ -220,7 +228,7 @@ def list_followups(
     if client_id:
         stmt = stmt.where(FollowUp.client_id == client_id)
     if mine:
-        stmt = stmt.where(FollowUp.assigned_to == v.user.id)
+        stmt = stmt.where(FollowUp.owner_id == v.user.id)
     if q and q.strip():
         like = f"%{q.strip().lower()}%"
         stmt = stmt.where(or_(*[func.lower(func.coalesce(col, "")).like(like) for col in (
@@ -242,7 +250,7 @@ def followups_summary(tz_offset: Optional[int] = None, mine: bool = False,
     start, end, _ = _day_bounds(tz_offset)
     base = _scope(select(FollowUp), v)
     if mine:
-        base = base.where(FollowUp.assigned_to == v.user.id)
+        base = base.where(FollowUp.owner_id == v.user.id)
 
     def count(view, extra=None):
         stmt = _view_filter(base, view, start, end)
@@ -316,7 +324,7 @@ def _timeline(session: Session, v: inbox.Viewer, kind: str, rec, limit: int = 80
     for f in session.exec(select(FollowUp).where(col == rec.id).order_by(FollowUp.created_at.desc()).limit(40)).all():
         if f.status == core.DONE:
             events.append({"key": f"fu-done-{f.id}", "type": "followup_done", "title": f"Follow-up completed: {f.title}",
-                           "body": f.outcome, "author": None, "date": _iso(f.completed_at)})
+                           "body": f.completion_note, "author": None, "date": _iso(f.completed_at)})
         events.append({"key": f"fu-{f.id}", "type": "followup", "title": f"Follow-up scheduled: {f.title}",
                        "body": f.notes, "author": None, "date": _iso(f.created_at), "due_at": _iso(f.due_at)})
     events.sort(key=lambda e: e.get("date") or "", reverse=True)
@@ -399,9 +407,10 @@ def create_followup(body: FollowUpCreate, v: inbox.Viewer = Depends(get_viewer),
         contact_name=(body.contact_name or "").strip() or info.get("contact_name"),
         contact_email=(body.contact_email or "").strip() or info.get("contact_email"),
         company_name=(body.company_name or "").strip() or info.get("label"),
-        title=body.title.strip(), notes=(body.notes or "").strip() or None, channel=body.channel, priority=body.priority,
-        due_at=due, remind_at=_parse_due(body.remind_at, east, "remind_at") or due,
-        assigned_to=_check_assignee(session, v, body.assigned_to) or info.get("owner_id") or v.user.id,
+        title=body.title.strip(), notes=(body.notes or "").strip() or None,
+        channel=core.db_channel(body.channel), priority=core.db_priority(body.priority),
+        due_at=due, reminder_minutes=core.minutes_before(due, _parse_due(body.remind_at, east, "remind_at")),
+        owner_id=_check_assignee(session, v, body.assigned_to) or info.get("owner_id") or v.user.id,
         created_by=v.user.id, email_subject=(body.email_subject or "").strip() or None,
         email_body=(body.email_body or "").strip() or None, auto_send=body.auto_send,
         source=body.source, source_ref=body.source_ref, ai_reason=body.ai_reason,
@@ -409,9 +418,9 @@ def create_followup(body: FollowUpCreate, v: inbox.Viewer = Depends(get_viewer),
     _validate_email_fields(fu)
     session.add(fu)
     session.flush()
-    core.log_activity(session, fu, "Follow-up scheduled", f"Due {due.date().isoformat()} via {fu.channel}", v.user.id)
-    if fu.assigned_to and fu.assigned_to != v.user.id:
-        core.notify(session, fu.assigned_to, fu.tenant_id, f"New follow-up assigned: {fu.title}",
+    core.log_activity(session, fu, "Follow-up scheduled", f"Due {due.date().isoformat()} via {fu.channel.lower()}", v.user.id)
+    if fu.owner_id and fu.owner_id != v.user.id:
+        core.notify(session, fu.owner_id, fu.tenant_id, f"New follow-up assigned: {fu.title}",
                     f"{v.user.name or v.user.email} assigned you a follow-up due {due.date().isoformat()}.",
                     core.record_path(fu.lead_id, fu.client_id))
     session.commit()
@@ -443,10 +452,14 @@ def update_followup(fu_id: int, body: FollowUpUpdate, v: inbox.Viewer = Depends(
     _, _, east = _day_bounds(body.tz_offset)
     fields = body.model_dump(exclude_unset=True)
     rescheduled = False
-    for key in ("title", "notes", "channel", "priority", "contact_name", "contact_email", "email_subject", "email_body"):
+    for key in ("title", "notes", "contact_name", "contact_email", "email_subject", "email_body"):
         if key in fields:
             value = fields[key]
             setattr(fu, key, (value.strip() or None) if isinstance(value, str) else value)
+    if body.channel is not None:
+        fu.channel = core.db_channel(body.channel)
+    if body.priority is not None:
+        fu.priority = core.db_priority(body.priority)
     if fu.title is None:
         raise HTTPException(status_code=400, detail="Title is required.")
     if "due_at" in fields:
@@ -454,32 +467,32 @@ def update_followup(fu_id: int, body: FollowUpUpdate, v: inbox.Viewer = Depends(
         if new_due is None:
             raise HTTPException(status_code=400, detail="A follow-up date is required.")
         rescheduled = core.as_utc(fu.due_at) != new_due
-        old_due = core.as_utc(fu.due_at)
-        fu.due_at = new_due
-        if "remind_at" not in fields and (fu.remind_at is None or core.as_utc(fu.remind_at) == old_due):
-            fu.remind_at = new_due
+        fu.due_at = new_due  # the reminder keeps its lead time (reminder_minutes)
     if "remind_at" in fields:
-        fu.remind_at = _parse_due(body.remind_at, east, "remind_at") or fu.due_at
+        if fu.due_at is None:
+            raise HTTPException(status_code=400, detail="Set a follow-up date before a reminder time.")
+        remind = _parse_due(body.remind_at, east, "remind_at")
+        fu.reminder_minutes = core.minutes_before(fu.due_at, remind) if remind else 0
         rescheduled = True
     if rescheduled:
-        fu.reminder_sent_at = None  # remind again for the new date
+        fu.reminder_sent_at = fu.overdue_notified_at = None  # remind again for the new date
     if "assigned_to" in fields:
-        fu.assigned_to = _check_assignee(session, v, body.assigned_to) or v.user.id
+        fu.owner_id = _check_assignee(session, v, body.assigned_to) or v.user.id
     if body.auto_send is not None:
         fu.auto_send = body.auto_send
         if body.auto_send:
             fu.last_error = None
-    if body.status == "Cancelled" and fu.status == core.OPEN:
+    if body.status == "Cancelled" and fu.status in core.OPEN_STATUSES:
         fu.status = core.CANCELLED
         fu.completed_at = core.utcnow()
         fu.completed_by = v.user.id
         core.log_activity(session, fu, "Follow-up cancelled", "", v.user.id)
-    elif body.status == "Pending" and fu.status != core.OPEN:
+    elif body.status == "Pending" and fu.status not in core.OPEN_STATUSES:
         fu.status = core.OPEN
-        fu.completed_at = fu.completed_by = fu.outcome = None
-        fu.reminder_sent_at = None
+        fu.completed_at = fu.completed_by = fu.completion_note = None
+        fu.reminder_sent_at = fu.overdue_notified_at = None
         core.log_activity(session, fu, "Follow-up reopened", "", v.user.id)
-    elif rescheduled:
+    elif rescheduled and fu.due_at is not None:
         core.log_activity(session, fu, "Follow-up rescheduled", f"New date {core.as_utc(fu.due_at).date().isoformat()}", v.user.id)
     _validate_email_fields(fu)
     fu.updated_at = core.utcnow()
@@ -514,15 +527,15 @@ class CompleteBody(BaseModel):
 def complete_followup(fu_id: int, body: CompleteBody, v: inbox.Viewer = Depends(get_viewer),
                       session: Session = Depends(get_session)):
     fu = _load(session, v, fu_id)
-    if fu.status != core.OPEN:
+    if fu.status not in core.OPEN_STATUSES:
         raise HTTPException(status_code=400, detail="This follow-up is already closed.")
     _, _, east = _day_bounds(body.tz_offset)
     now = core.utcnow()
     fu.status, fu.completed_at, fu.completed_by = core.DONE, now, v.user.id
-    fu.outcome = (body.outcome or "").strip() or None
+    fu.completion_note = (body.outcome or "").strip() or None
     fu.updated_at = now
     session.add(fu)
-    core.log_activity(session, fu, "Follow-up completed", fu.outcome or "", v.user.id)
+    core.log_activity(session, fu, "Follow-up completed", fu.completion_note or "", v.user.id)
     nxt = None
     if body.next:
         due = _parse_due(body.next.due_at, east)
@@ -531,10 +544,12 @@ def complete_followup(fu_id: int, body: CompleteBody, v: inbox.Viewer = Depends(
         nxt = FollowUp(
             tenant_id=fu.tenant_id, lead_id=fu.lead_id, client_id=fu.client_id, contact_name=fu.contact_name,
             contact_email=fu.contact_email, company_name=fu.company_name,
-            title=(body.next.title or "").strip() or fu.title, channel=body.next.channel or fu.channel,
-            notes=(body.next.notes or "").strip() or (f"Previous follow-up outcome: {fu.outcome}" if fu.outcome else fu.notes),
-            priority=fu.priority, due_at=due, remind_at=due, source="completed_chain", source_ref=f"followup-{fu.id}",
-            assigned_to=fu.assigned_to or v.user.id, created_by=v.user.id,
+            title=(body.next.title or "").strip() or fu.title,
+            channel=core.db_channel(body.next.channel) if body.next.channel else fu.channel,
+            notes=(body.next.notes or "").strip() or (f"Previous follow-up outcome: {fu.completion_note}" if fu.completion_note else fu.notes),
+            priority=fu.priority, due_at=due, reminder_minutes=fu.reminder_minutes,
+            source="completed_chain", source_ref=f"followup-{fu.id}",
+            owner_id=fu.owner_id or v.user.id, created_by=v.user.id,
         )
         session.add(nxt)
         session.flush()
@@ -561,10 +576,10 @@ def _followup_history_text(session: Session, col, rec_id: int, exclude_id: Optio
     for f in rows:
         if f.id == exclude_id:
             continue
-        due = core.as_utc(f.due_at).date().isoformat()
+        due = core.as_utc(f.due_at).date().isoformat() if f.due_at else "no date"
         line = f"- {due} [{f.status}] {f.title}"
-        if f.outcome:
-            line += f" — outcome: {inbox._clip(f.outcome, 300)}"
+        if f.completion_note:
+            line += f" — outcome: {inbox._clip(f.completion_note, 300)}"
         elif f.notes:
             line += f" — {inbox._clip(f.notes, 200)}"
         lines.append(line)
@@ -699,7 +714,7 @@ def send_followup_email(fu_id: int, body: SendBody, v: inbox.Viewer = Depends(ge
     if not fu.contact_email:
         fu.contact_email = to
     core.mark_email_sent(session, fu, sent, actor_id=v.user.id, actor_name=v.user.name or v.user.email,
-                         complete=body.complete and fu.status == core.OPEN, outcome=(body.outcome or "").strip() or None)
+                         complete=body.complete and fu.status in core.OPEN_STATUSES, outcome=(body.outcome or "").strip() or None)
     fu.auto_send = False
     session.commit()
     session.refresh(fu)
