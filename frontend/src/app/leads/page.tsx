@@ -138,17 +138,21 @@ export default function LeadsPage() {
   const handleAutoAssignLeads = async () => {
     setAutoAssigning(true);
     try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
       const res = await fetch(`${API_BASE_URL}/leads/auto-assign`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" }
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {})
+        }
       });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        const data = await res.json();
-        alert(`Auto-assign complete: ${data.assigned_count} unassigned leads distributed fairly across ${data.salespeople_count} team members!`);
+        alert(data.message || `Auto-assign complete: ${data.assigned_count} unassigned leads distributed fairly across ${data.salespeople_count || 1} team members!`);
         fetchLeads();
         fetchEmployees();
       } else {
-        alert("Auto-assign failed");
+        alert(data.detail || "Auto-assign failed");
       }
     } catch (e) {
       alert("Error calling auto-assign");

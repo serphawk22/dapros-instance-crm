@@ -64,10 +64,14 @@ export default function SalesAssignModal({ isOpen, onClose, onAssign, entityType
 
   const handleAutoAssign = () => {
     // Auto-assign: pick the sales person with the fewest total active items
-    // Tie-break: prioritise Employee role over Admin, then by name alphabetically
+    // Tie-break: exclude/deprioritize system placeholder emails, prioritise Employee over SalesManager over Admin, then by workload
+    const dummyEmails = ['admin@example.com', 'superadmin@serphawk.in', 'demo@serphawk.com', 'admin@serphawk.com'];
     const sorted = [...employees].sort((a, b) => {
+      const aIsDummy = dummyEmails.includes((a.email || '').toLowerCase()) ? 1 : 0;
+      const bIsDummy = dummyEmails.includes((b.email || '').toLowerCase()) ? 1 : 0;
+      if (aIsDummy !== bIsDummy) return aIsDummy - bIsDummy;
       if (a.total_active !== b.total_active) return a.total_active - b.total_active;
-      const roleRank = (r: string) => r === 'Employee' ? 0 : r === 'SalesManager' ? 1 : 2;
+      const roleRank = (r: string) => r === 'Employee' ? 0 : (r === 'SalesManager' || r === 'Sales Manager') ? 1 : 2;
       if (roleRank(a.role) !== roleRank(b.role)) return roleRank(a.role) - roleRank(b.role);
       return (a.name || '').localeCompare(b.name || '');
     });

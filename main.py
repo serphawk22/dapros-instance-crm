@@ -12462,36 +12462,72 @@ def export_leads_csv(owner_id: Optional[int] = None, session: Session = Depends(
         headers={"Content-Disposition": "attachment; filename=serphawk_leads.csv"}
     )
 
+def get_assignable_salespeople(session: Session, tenant_id: Optional[int] = 1) -> list[User]:
+    """
+    Returns active team members eligible for lead assignment in priority order:
+    1. Dedicated sales team (SalesManager, Sales Manager, Sales)
+    2. General employees (Employee)
+    3. Business Admins (Admin, excluding generic platform demo/test accounts)
+    4. Fallback to any active staff user
+    """
+    SYSTEM_EXCLUDES = ["admin@example.com", "superadmin@serphawk.in", "demo@serphawk.com"]
+
+    def _apply_tenant(q):
+        if tenant_id and tenant_id > 1:
+            return q.where(User.tenant_id == tenant_id)
+        elif tenant_id == 1:
+            return q.where((User.tenant_id == 1) | (User.tenant_id == None))
+        return q
+
+    # 1. Dedicated sales team
+    q_sales = select(User).where(
+        User.role.in_(["SalesManager", "Sales Manager", "Sales"]),
+        User.is_active == True,
+        User.email.not_in(SYSTEM_EXCLUDES)
+    )
+    reps = session.exec(_apply_tenant(q_sales)).all()
+    if reps:
+        return list(reps)
+
+    # 2. General employees
+    q_emp = select(User).where(
+        User.role.in_(["Employee"]),
+        User.is_active == True,
+        User.email.not_in(SYSTEM_EXCLUDES)
+    )
+    reps = session.exec(_apply_tenant(q_emp)).all()
+    if reps:
+        return list(reps)
+
+    # 3. Business admins (e.g. padilla@dapros.com.mx, contacto@dapros.com.mx)
+    q_admins = select(User).where(
+        User.role.in_(["Admin"]),
+        User.is_active == True,
+        User.email.not_in(SYSTEM_EXCLUDES + ["admin@serphawk.com"])
+    )
+    reps = session.exec(_apply_tenant(q_admins)).all()
+    if reps:
+        return list(reps)
+
+    # 4. Fallback to any active staff user (including admin@serphawk.com if no other staff)
+    q_fallback = select(User).where(
+        User.role.in_(["Admin", "SuperAdmin", "SalesManager", "Employee"]),
+        User.is_active == True,
+        User.email.not_in(["admin@example.com", "demo@serphawk.com"])
+    )
+    reps = session.exec(_apply_tenant(q_fallback)).all()
+    return list(reps)
+
+
 def auto_assign_lead_to_salesperson(session: Session, lead: Lead, tenant_id: Optional[int] = 1) -> Optional[User]:
     """
     Auto-assign lead to active salesperson using round-robin distribution,
     breaking ties based on sales reps' historical conversion rate and performance.
-    Admins (e.g. System Admin) are strictly excluded from automated lead assignment.
     """
     if not tenant_id or tenant_id == -1:
         tenant_id = 1
 
-    # First priority: actual sales team members (SalesManager, Sales)
-    q_reps = select(User).where(
-        User.role.in_(["SalesManager", "Sales"]),
-        User.is_active == True,
-        User.email.not_in(["admin@example.com", "superadmin@serphawk.in", "admin@serphawk.com"])
-    )
-    if tenant_id and tenant_id != 1:
-        q_reps = q_reps.where(User.tenant_id == tenant_id)
-    reps = session.exec(q_reps).all()
-
-    # Fallback to employees if no designated sales reps exist, but never assign to Admin
-    if not reps:
-        q_fallback = select(User).where(
-            User.role.in_(["Employee"]),
-            User.is_active == True,
-            User.email.not_in(["admin@example.com", "superadmin@serphawk.in", "admin@serphawk.com"])
-        )
-        if tenant_id and tenant_id != 1:
-            q_fallback = q_fallback.where(User.tenant_id == tenant_id)
-        reps = session.exec(q_fallback).all()
-
+    reps = get_assignable_salespeople(session, tenant_id=tenant_id)
     if not reps:
         return None
 
@@ -13114,29 +13150,13 @@ def auto_assign_unassigned_leads(session: Session = Depends(get_session)):
     caller_id = current_salesperson_id.get()
     if caller_id:
         caller = session.get(User, caller_id)
-        if caller and caller.role not in ["Admin", "SuperAdmin"]:
-            raise HTTPException(status_code=403, detail="Only Admins can trigger auto-assigning leads.")
+        if caller and caller.role not in ["Admin", "SuperAdmin", "SalesManager", "Sales Manager"]:
+            raise HTTPException(status_code=403, detail="Only Admins and Managers can trigger auto-assigning leads.")
 
     tenant_id = current_tenant_id.get()
-    q_reps = select(User).where(
-        User.role.in_(["SalesManager", "Sales"]),
-        User.is_active == True,
-        User.email.not_in(["admin@example.com", "superadmin@serphawk.in", "admin@serphawk.com"])
-    )
-    if tenant_id and tenant_id != 1:
-        q_reps = q_reps.where(User.tenant_id == tenant_id)
-    reps = session.exec(q_reps).all()
+    reps = get_assignable_salespeople(session, tenant_id=tenant_id)
     if not reps:
-        q_fallback = select(User).where(
-            User.role.in_(["Employee"]),
-            User.is_active == True,
-            User.email.not_in(["admin@example.com", "superadmin@serphawk.in", "admin@serphawk.com"])
-        )
-        if tenant_id and tenant_id != 1:
-            q_fallback = q_fallback.where(User.tenant_id == tenant_id)
-        reps = session.exec(q_fallback).all()
-    if not reps:
-        raise HTTPException(status_code=400, detail="No active salespeople found to assign leads.")
+        raise HTTPException(status_code=400, detail="No active salespeople or team members found to assign leads.")
 
     # Calculate workload and conversion performance for each salesperson
     rep_stats = []
@@ -13155,12 +13175,18 @@ def auto_assign_unassigned_leads(session: Session = Depends(get_session)):
 
     # Fetch unassigned leads
     q_unassigned = select(Lead).where(or_(Lead.owner_id == None, Lead.owner_id == 0))
-    if tenant_id and tenant_id != 1:
+    if tenant_id and tenant_id > 1:
         q_unassigned = q_unassigned.where(Lead.tenant_id == tenant_id)
+    elif tenant_id == 1:
+        q_unassigned = q_unassigned.where((Lead.tenant_id == 1) | (Lead.tenant_id == None))
     unassigned_leads = session.exec(q_unassigned.order_by(Lead.created_at.asc())).all()
 
     if not unassigned_leads:
-        return {"assigned_count": 0, "message": "All leads are already assigned to salespeople."}
+        return {
+            "assigned_count": 0,
+            "salespeople_count": len(reps),
+            "message": "All leads are already assigned to salespeople."
+        }
 
     assignments = []
     for lead in unassigned_leads:
@@ -13180,6 +13206,7 @@ def auto_assign_unassigned_leads(session: Session = Depends(get_session)):
     session.commit()
     return {
         "assigned_count": len(assignments),
+        "salespeople_count": len(reps),
         "message": f"Successfully auto-assigned {len(assignments)} leads across {len(reps)} salespeople using round-robin and performance weighting.",
         "assignments": assignments
     }
