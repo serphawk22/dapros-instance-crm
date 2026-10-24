@@ -64,6 +64,21 @@ function AppContent({ children }: { children: React.ReactNode }) {
   const isAdminOrEmployee = isAuthenticated && (role === "Admin" || role === "Employee" || role === "Intern" || role === "SalesManager" || role === "Demo");
   const showChatbot = !!role && role !== "Client"; // Show for ALL roles except unauthenticated Client
 
+  // Re-trigger translation on client-side route changes if in Spanish
+  useEffect(() => {
+    const saved = typeof window !== "undefined" ? (localStorage.getItem("language") || localStorage.getItem("crm-language")) : null;
+    if (saved === "es") {
+      const timer = setTimeout(() => {
+        const select = document.querySelector<HTMLSelectElement>(".goog-te-combo");
+        if (select) {
+          select.value = "es";
+          select.dispatchEvent(new Event("change"));
+        }
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [pathname]);
+
   useEffect(() => {
     const handleError = (event: ErrorEvent) => {
       console.group("Global Error Captured");
@@ -257,6 +272,41 @@ export default function RootLayout({
             </I18nProvider>
           </ThemeProvider>
         </GoogleProviderWrapper>
+
+        {/* Hidden Google Translate hook — translates the entire page DOM seamlessly */}
+        <div id="google_translate_element" style={{ display: "none" }} />
+        <Script
+          id="google-translate-init"
+          strategy="afterInteractive"
+          dangerouslySetInnerHTML={{
+            __html: `
+              function googleTranslateElementInit() {
+                new google.translate.TranslateElement(
+                  { pageLanguage: 'en', includedLanguages: 'es', autoDisplay: false },
+                  'google_translate_element'
+                );
+                var savedLang = localStorage.getItem('language') || localStorage.getItem('crm-language');
+                if (savedLang === 'es') {
+                  var checkInterval = setInterval(function() {
+                    var select = document.querySelector('.goog-te-combo');
+                    if (select) {
+                      clearInterval(checkInterval);
+                      if (select.value !== 'es') {
+                        select.value = 'es';
+                        select.dispatchEvent(new Event('change'));
+                      }
+                    }
+                  }, 150);
+                  setTimeout(function() { clearInterval(checkInterval); }, 6000);
+                }
+              }
+            `,
+          }}
+        />
+        <Script
+          src="https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"
+          strategy="afterInteractive"
+        />
 
       </body>
     </html>

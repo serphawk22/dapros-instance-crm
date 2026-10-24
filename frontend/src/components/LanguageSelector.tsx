@@ -20,16 +20,23 @@ export default function LanguageSelector({ className }: LanguageSelectorProps = 
   // translates the app. Tracking react-i18next's `i18n.language` here drifts
   // out of sync (content switches but the highlighted button does not).
   const currentLang = SUPPORTED_LANGUAGES.find(l => l.code === language) || SUPPORTED_LANGUAGES[0];
-  // English only
-  const displayedLanguages = SUPPORTED_LANGUAGES.filter(l => l.code === 'en');
+  // Show all supported languages (EN & ES)
+  const displayedLanguages = SUPPORTED_LANGUAGES;
 
-  // Synchronize language from localStorage on mount (default is English)
+  // Synchronize language from localStorage on mount
   useEffect(() => {
-    if (i18n.language !== 'en') {
-      i18n.changeLanguage('en');
+    const saved = (localStorage.getItem('crm-language') || localStorage.getItem('language')) as Language | null;
+    if (saved && (saved === 'en' || saved === 'es')) {
+      if (i18n.language !== saved) {
+        i18n.changeLanguage(saved);
+      }
+      setLanguage(saved);
+      if (saved === 'es') {
+        document.documentElement.classList.remove('notranslate');
+        document.documentElement.removeAttribute('translate');
+      }
     }
-    setLanguage('en');
-  }, []);
+  }, [i18n, setLanguage]);
 
   const changeLanguage = (code: string) => {
     i18n.changeLanguage(code);

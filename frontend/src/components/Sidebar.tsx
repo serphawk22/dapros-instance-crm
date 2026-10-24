@@ -136,7 +136,7 @@ const defaultSidebarSections = [
 ];
 
 // --- Sortable Section Component ---
-const DEFAULT_HEADINGS = ["CRM", "PROJECTS & ACTIVITIES", "TEAMS", "AI AGENTS", "INVENTORY", "SUPPORT"];
+const DEFAULT_HEADINGS = ["CRM", "PROJECTS & ACTIVITIES", "ACTIVITIES", "TEAMS", "AI AGENTS", "INVENTORY", "SUPPORT", "FINANCE"];
 const ITEM_KEY_OVERRIDES: Record<string, string> = {
   "item-teams": "team_directory",
   "item-products": "catalog",
@@ -575,8 +575,14 @@ export function Sidebar({ role }: SidebarProps) {
 
   // ── Language Toggle ──
   const { i18n } = useTranslation();
-  const { t, setLanguage } = useLanguage();
-  const [activeLang, setActiveLang] = useState<"en" | "es">("en");
+  const { t, language, setLanguage } = useLanguage();
+  const [activeLang, setActiveLang] = useState<"en" | "es">(language || "en");
+
+  useEffect(() => {
+    if (language) {
+      setActiveLang(language);
+    }
+  }, [language]);
 
   const switchLanguage = useCallback((lang: "en" | "es") => {
     i18n.changeLanguage(lang);
@@ -596,6 +602,10 @@ export function Sidebar({ role }: SidebarProps) {
     }
 
     // Switching TO Spanish:
+    localStorage.setItem("language", lang);
+    document.cookie = `googtrans=/en/${lang}; path=/;`;
+    document.cookie = `googtrans=/en/${lang}; path=/; domain=${window.location.hostname}`;
+    document.cookie = `googtrans=/en/${lang}; path=/; domain=.${window.location.hostname}`;
     // Remove notranslate so GT is allowed to translate the page.
     document.documentElement.classList.remove("notranslate");
     document.documentElement.removeAttribute("translate");
