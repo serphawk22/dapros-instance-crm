@@ -18513,6 +18513,57 @@ async def import_leads_csv(file: UploadFile = File(...), session: Session = Depe
     return {"created": created, "skipped": skipped, "errors": errors}
 
 
+@app.post("/import/clients/csv")
+async def import_clients_csv(file: UploadFile = File(...), session: Session = Depends(get_session)):
+    content = await file.read()
+    try:
+        decoded = content.decode("utf-8-sig")
+    except Exception:
+        decoded = content.decode("latin-1")
+    
+    reader = csv.DictReader(io.StringIO(decoded))
+    created, skipped = 0, 0
+    errors = []
+    
+    FIELD_MAP = {
+        "company": "company_name", "company name": "company_name", "companyname": "company_name",
+        "name": "company_name",
+        "email": "email", "e-mail": "email",
+        "phone": "phone", "mobile": "phone", "tel": "phone",
+        "address": "address", "location": "address",
+        "status": "status",
+        "notes": "notes", "note": "notes",
+        "website": "website",
+    }
+    
+    for i, row in enumerate(reader):
+        try:
+            mapped = {}
+            for col, val in row.items():
+                key = (col or "").strip().lower()
+                if key in FIELD_MAP:
+                    mapped[FIELD_MAP[key]] = (val or "").strip()
+            
+            company_name = mapped.get("company_name", "")
+            if not company_name:
+                skipped += 1
+                continue
+            
+            client = ClientProfile(
+                companyName=company_name,
+                phone=mapped.get("phone") or None,
+                address=mapped.get("address") or None,
+                status=mapped.get("status") or "Active",
+            )
+            session.add(client)
+            created += 1
+        except Exception as e:
+            errors.append(f"Row {i+2}: {str(e)}")
+    
+    session.commit()
+    return {"created": created, "skipped": skipped, "errors": errors}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 from pydantic import BaseModel
 

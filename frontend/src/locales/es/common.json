@@ -245,6 +245,7 @@
     "emailOutreach": "Prospección por Email"
   },
   "clients": {
+    "import": "Importar",
     "title": "Clientes",
     "client": "Cliente",
     "createClient": "Crear Cliente",

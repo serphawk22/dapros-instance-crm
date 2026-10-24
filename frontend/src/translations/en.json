@@ -49,6 +49,7 @@
     "no_activity": "No activity recorded yet"
   },
   "clients": {
+    "import": "Import",
     "title": "Client Hub",
     "description": "Manage all accounts, operations, and intelligence in one place.",
     "total_accounts": "Total Accounts",

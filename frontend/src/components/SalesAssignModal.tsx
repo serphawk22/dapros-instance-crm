@@ -21,8 +21,10 @@ interface SalesPerson {
 interface SalesAssignModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAssign: (employeeId: number | null, employeeName: string | null) => void;
-  entityType: 'client' | 'lead';
+  onAssign: (employeeId: number | null, employeeName: string | null, reason?: string) => void | Promise<void>;
+  entityType?: 'client' | 'lead';
+  clientId?: number;
+  currentSalespersonName?: string;
 }
 
 function getWorkloadColor(total: number): { bar: string; badge: string; label: string } {

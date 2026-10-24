@@ -49,6 +49,7 @@
     "no_activity": "Aún no hay actividad registrada"
   },
   "clients": {
+    "import": "Importar",
     "title": "Centro de Clientes",
     "description": "Administra todas las cuentas, operaciones e inteligencia en un solo lugar.",
     "total_accounts": "Cuentas Totales",

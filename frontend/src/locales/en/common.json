@@ -245,6 +245,7 @@
     "emailOutreach": "Email Outreach"
   },
   "clients": {
+    "import": "Import",
     "title": "Clients",
     "client": "Client",
     "createClient": "Create Client",
