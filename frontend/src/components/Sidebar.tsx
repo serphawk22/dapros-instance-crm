@@ -120,7 +120,7 @@ const defaultSidebarSections = [
     id: "section-support",
     heading: "SUPPORT",
     items: [
-      { id: "item-cases", name: "Cases", icon: "HeadphonesIcon", href: "https://projecthub.serphawk.in/client/login", roles: ["Admin", "Employee", "SalesManager", "ProjectMember", "Demo"] },
+      { id: "item-cases", name: "Support@SH", icon: "HeadphonesIcon", href: "https://projecthub.serphawk.in/client/login", roles: ["Admin", "Employee", "SalesManager", "ProjectMember", "Demo"] },
       { id: "item-solutions", name: "Solutions", icon: "BookOpen", href: "/support/solutions", roles: ["Admin", "SalesManager", "Demo"] },
     ],
   },
