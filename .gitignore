@@ -43,7 +43,7 @@ health.json
 *.log
 .myvenv/
 .schema_created
-.migration_done
+.migration_done*
 check_sqlite.py
 .local/
 !tests/test_*.py

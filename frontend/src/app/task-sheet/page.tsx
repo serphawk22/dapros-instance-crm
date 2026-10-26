@@ -194,9 +194,13 @@ export default function TaskSheetPage() {
       if (selectedEmployee !== "all") {
         body.salesperson_id = Number(selectedEmployee);
       }
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
       const res = await fetch(`${API_BASE_URL}/task-sheet/ai-summary`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {})
+        },
         body: JSON.stringify(body)
       });
       if (res.ok) {

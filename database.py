@@ -71,6 +71,7 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
                 _resolved_ip = None
                 if "neon.tech" in _db_host:
                     _resolved_ip = "3.141.122.14"
+                    connect_args["hostaddr"] = _resolved_ip
                 else:
                     try:
                         import socket

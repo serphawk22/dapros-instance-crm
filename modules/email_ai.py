@@ -13,7 +13,10 @@ import json
 import os
 from datetime import datetime, timezone
 
+from dotenv import load_dotenv
 from sqlmodel import Session, select
+
+load_dotenv(override=True)
 
 TRIAGE_MODEL = os.getenv("INBOX_AI_MODEL", "gpt-4o-mini")
 DRAFT_MODEL = os.getenv("EMAIL_DRAFT_MODEL", "gpt-4o")

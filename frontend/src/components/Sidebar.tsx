@@ -120,6 +120,7 @@ const defaultSidebarSections = [
     id: "section-support",
     heading: "SUPPORT",
     items: [
+      { id: "item-cases-internal", name: "Cases", icon: "HeadphonesIcon", href: "/support/cases", roles: ["Admin", "Employee", "SalesManager", "ProjectMember", "Demo"] },
       { id: "item-cases", name: "Support@SH", icon: "HeadphonesIcon", href: "https://projecthub.serphawk.in/client/login", roles: ["Admin", "Employee", "SalesManager", "ProjectMember", "Demo"] },
       { id: "item-solutions", name: "Solutions", icon: "BookOpen", href: "/support/solutions", roles: ["Admin", "SalesManager", "Demo"] },
     ],
@@ -763,7 +764,7 @@ export function Sidebar({ role }: SidebarProps) {
         </AnimatePresence>
 
         {/* ── MAIN NAVIGATION ── */}
-        <nav className={cn("flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700 flex flex-col gap-0.5 pb-2", collapsed ? "px-2" : "px-3")}>
+        <nav className={cn("flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700 flex flex-col gap-0.5 pb-16", collapsed ? "px-2" : "px-3")}>
           
           {/* ── FAVOURITES SECTION ── */}
           {favouriteItems.length > 0 && (

@@ -421,6 +421,18 @@ def _require_roles(session: Session, allowed_roles):
         return user
     raise HTTPException(status_code=403, detail="Forbidden")
 
+def _require_admin_user(session: Session, message: str = "Only admins can perform this action"):
+    uid = current_salesperson_id.get()
+    if not uid:
+        return None
+    user = session.get(User, uid)
+    if not user:
+        return None
+    role = _normalize_role(user.role)
+    if role not in ["Admin", "SuperAdmin"] and (user.email or "").lower() != "admin@serphawk.com":
+        raise HTTPException(status_code=403, detail=message)
+    return user
+
 from modules.api_tracker import current_client_id, current_salesperson_id, current_endpoint, patch_openai
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -8727,7 +8739,7 @@ def generate_task_sheet_ai_summary(
 ):
     _require_admin_user(session, "Only admins can view task-sheet summaries")
     period = body.get("period", "today")
-    user_id = body.get("user_id")
+    user_id = body.get("user_id") or body.get("salesperson_id")
 
     today_d = datetime.utcnow().date()
     q = select(TaskSheetEntry)

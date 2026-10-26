@@ -8,6 +8,9 @@ from datetime import datetime, date, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from pydantic import BaseModel
 from sqlmodel import Session, select
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 from database import get_session, User, Lead, Deal, ClientProfile, Invoice, Meeting, CallLog, FollowUp, CRMQuote, Proposal
 

@@ -18,10 +18,6 @@ const TYPE_COLORS: Record<string, string> = { Bug: "bg-red-500/10 text-red-600",
 export default function CasesPage() {
   const { t } = useLanguage();
   const { role, user } = useRole();
-
-  useEffect(() => {
-    window.location.replace("https://projecthub.serphawk.in/client/login");
-  }, []);
   const [cases, setCases] = useState<Case[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -81,19 +77,9 @@ export default function CasesPage() {
           <div className="p-3 rounded-2xl bg-gradient-to-br from-rose-500 to-pink-600 shadow-lg shadow-rose-500/20"><HeadphonesIcon className="w-6 h-6 text-white" /></div>
           <div><h1 className="text-2xl font-black text-slate-800 dark:text-zinc-100">{t("support_cases.title")}</h1><p className="text-sm text-slate-500 dark:text-zinc-400">{t("support_cases.subtitle")}</p></div>
         </div>
-        <div className="flex items-center gap-3">
-          <a
-            href="https://projecthub.serphawk.in/client/login"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 text-white dark:bg-white dark:text-zinc-900 text-sm font-bold hover:opacity-90 shadow-md transition-all"
-          >
-            <Globe className="w-4 h-4" /> Open ProjectHub Portal
-          </a>
-          <button onClick={openCreate} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 text-white text-sm font-bold hover:opacity-90 shadow-md transition-all">
-            <Plus className="w-4 h-4" /> {t("support_cases.new_case")}
-          </button>
-        </div>
+        <button onClick={openCreate} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 text-white text-sm font-bold hover:opacity-90 shadow-md transition-all">
+          <Plus className="w-4 h-4" /> {t("support_cases.new_case")}
+        </button>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
