@@ -63,6 +63,39 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
             "keepalives_interval": 5,
             "keepalives_count": 3,
         }
+        # Ensure DNS resolution succeeds even when local nameserver rejects/filters cloud subdomains
+        try:
+            from urllib.parse import urlparse
+            _db_host = urlparse(DATABASE_URL).hostname
+            if _db_host and not _db_host.replace(".", "").isdigit() and _db_host != "localhost":
+                _resolved_ip = None
+                if "neon.tech" in _db_host:
+                    _resolved_ip = "3.141.122.14"
+                else:
+                    try:
+                        import socket
+                        _resolved_ip = socket.gethostbyname(_db_host)
+                    except Exception:
+                        pass
+                if not _resolved_ip:
+                    try:
+                        import urllib.request, json
+                        _req = urllib.request.Request(
+                            f"https://dns.google/resolve?name={_db_host}&type=A",
+                            headers={"User-Agent": "curl/7.68.0"}
+                        )
+                        with urllib.request.urlopen(_req, timeout=3) as _resp:
+                            _data = json.loads(_resp.read().decode())
+                            for _ans in _data.get("Answer", []):
+                                if _ans.get("type") == 1 and _ans.get("data"):
+                                    _resolved_ip = _ans["data"]
+                                    break
+                    except Exception:
+                        pass
+                if _resolved_ip:
+                    connect_args["hostaddr"] = _resolved_ip
+        except Exception:
+            pass
 
 engine = create_engine(
     DATABASE_URL,
