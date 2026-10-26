@@ -57,7 +57,7 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
         # detect dead peers via TCP keepalive (a stale connection otherwise blocks
         # pool_pre_ping for many minutes and stalls every request).
         connect_args = {
-            "connect_timeout": 10,
+            "connect_timeout": 45,
             "keepalives": 1,
             "keepalives_idle": 20,
             "keepalives_interval": 5,

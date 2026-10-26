@@ -878,99 +878,37 @@ def on_startup():
     except Exception as e:
         print("Admin user init error:", e)
 
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN sidebar_preferences JSON;"))
-            conn.commit()
-            print("Successfully added sidebar_preferences to users table.")
-    except Exception as e:
-        print("sidebar_preferences column already exists or error:", e)
+    if not os.path.exists(".migration_done_extra"):
+        extra_migrations = [
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS sidebar_preferences JSON;",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50);",
+            "ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS call_pitch_done BOOLEAN DEFAULT FALSE;",
+            "ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS call_pitch_text TEXT;",
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS limit_calls INTEGER DEFAULT 5;",
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS usage_calls INTEGER DEFAULT 0;",
+            "ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_analysis_results JSON;",
+            "ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS swot_analysis TEXT;",
+            "ALTER TABLE leads ADD COLUMN IF NOT EXISTS swot_analysis TEXT;",
+            "ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_type VARCHAR DEFAULT 'Development';",
+            'ALTER TABLE projects ADD COLUMN IF NOT EXISTS "clientId" INTEGER;',
+            'ALTER TABLE projects ADD COLUMN IF NOT EXISTS "leadId" INTEGER;',
+            "ALTER TABLE cases ADD COLUMN IF NOT EXISTS url VARCHAR(1000);",
+            "ALTER TABLE cases ADD COLUMN IF NOT EXISTS case_type VARCHAR(100) DEFAULT 'Bug';",
+        ]
+        try:
+            with engine.connect() as conn:
+                for sql in extra_migrations:
+                    try:
+                        conn.execute(text(sql))
+                    except Exception:
+                        pass
+                conn.commit()
+            open(".migration_done_extra", "w").close()
+            print("Successfully verified extra schema columns.")
+        except Exception as e:
+            print("Extra schema check skipped or error:", e)
 
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50);"))
-            conn.commit()
-            print("Successfully added phone to users table.")
-    except Exception as e:
-        print("phone column already exists or error:", e)
-        
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS call_pitch_done BOOLEAN DEFAULT FALSE;"))
-            conn.execute(text("ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS call_pitch_text TEXT;"))
-            conn.commit()
-            print("Successfully added call_pitch columns to client_profiles table.")
-    except Exception as e:
-        print("call_pitch columns already exist or error:", e)
-        
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS limit_calls INTEGER DEFAULT 5;"))
-            conn.execute(text("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS usage_calls INTEGER DEFAULT 0;"))
-            conn.commit()
-            print("Successfully added call limit/usage columns to tenants table.")
-    except Exception as e:
-        print("tenant call limit/usage columns already exist or error:", e)
-        
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE leads ADD COLUMN ai_analysis_results JSON;"))
-            conn.commit()
-            print("Successfully added ai_analysis_results to leads table.")
-    except Exception as e:
-        print("ai_analysis_results column already exists or error:", e)
-        
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS swot_analysis TEXT;"))
-            conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS swot_analysis TEXT;"))
-            conn.commit()
-            print("Successfully added swot_analysis to client_profiles and leads tables.")
-    except Exception as e:
-        print("swot_analysis column already exists or error:", e)
-        
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE projects ADD COLUMN project_type VARCHAR DEFAULT 'Development';"))
-            conn.commit()
-            print("Successfully added project_type to projects table.")
-    except Exception as e:
-        print("project_type column already exists or error:", e)
-        
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE projects ADD COLUMN \"clientId\" INTEGER;"))
-            conn.commit()
-            print("Successfully added clientId to projects table.")
-    except Exception as e:
-        print("clientId column already exists or error:", e)
-        
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE projects ADD COLUMN \"leadId\" INTEGER;"))
-            conn.commit()
-            print("Successfully added leadId to projects table.")
-    except Exception as e:
-        print("leadId column already exists or error:", e)
-
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(50);"))
-            conn.commit()
-            print("Successfully added phone to users table.")
-    except Exception as e:
-        print("phone column already exists or error:", e)
-
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE tenants ADD COLUMN limit_calls INTEGER DEFAULT 5;"))
-            conn.execute(text("ALTER TABLE tenants ADD COLUMN usage_calls INTEGER DEFAULT 0;"))
-            conn.commit()
-            print("Successfully added call limits to tenants table.")
-    except Exception as e:
-        print("tenant call limits already exist or error:", e)
-
-# Keep the Neon serverless DB awake + pool warm. Without this, the first
+    # Keep the Neon serverless DB awake + pool warm. Without this, the first
     # requests after ~5min of idle trigger a slow cold-start (~5-7s each).
     try:
         import threading as _threading
@@ -991,15 +929,6 @@ def on_startup():
         print("DB keepalive started (pings every 60s).")
     except Exception as e:
         print("Could not start DB keepalive:", e)
-
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE cases ADD COLUMN IF NOT EXISTS url VARCHAR(1000);"))
-            conn.execute(text("ALTER TABLE cases ADD COLUMN IF NOT EXISTS case_type VARCHAR(100) DEFAULT 'Bug';"))
-            conn.commit()
-            print("Successfully added url and case_type columns to cases table.")
-    except Exception as e:
-        print("cases url/case_type columns already exist or error:", e)
 
 allowed_origins = [
     "https://serphawk-crm-seo.vercel.app",
@@ -19802,6 +19731,8 @@ def add_movement(item_id: int, body: StockMovementRequest, session: Session = De
 
 @app.on_event("startup")
 def _ensure_inventory_section_schema():
+    if os.path.exists(".migration_done_inventory"):
+        return
     from sqlalchemy import text
     from sqlmodel import SQLModel
     try:
@@ -19823,6 +19754,10 @@ def _ensure_inventory_section_schema():
                 conn.execute(text(sql))
         except Exception:
             pass
+    try:
+        open(".migration_done_inventory", "w").close()
+    except Exception:
+        pass
 
 
 
