@@ -16,13 +16,7 @@ const nextConfig: NextConfig = {
     ];
   },
   async redirects() {
-    return [
-      {
-        source: '/support/cases',
-        destination: 'https://projecthub.serphawk.in/client/login',
-        permanent: false,
-      },
-    ];
+    return [];
   },
 };
 
