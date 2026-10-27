@@ -120,6 +120,7 @@ const defaultSidebarSections = [
     id: "section-support",
     heading: "SUPPORT",
     items: [
+      { id: "item-support-sh", name: "Support@SH", icon: "HeadphonesIcon", href: "https://projecthub.serphawk.in/client/login", roles: ["Admin", "Employee", "SalesManager", "ProjectMember", "Demo"] },
       { id: "item-cases", name: "Cases", icon: "HeadphonesIcon", href: "/support/cases", roles: ["Admin", "Employee", "SalesManager", "ProjectMember", "Demo"] },
       { id: "item-solutions", name: "Solutions", icon: "BookOpen", href: "/support/solutions", roles: ["Admin", "SalesManager", "Demo"] },
     ],
@@ -140,6 +141,7 @@ const DEFAULT_HEADINGS = ["CRM", "PROJECTS & ACTIVITIES", "ACTIVITIES", "TEAMS",
 const ITEM_KEY_OVERRIDES: Record<string, string> = {
   "item-teams": "team_directory",
   "item-products": "catalog",
+  "item-support-sh": "support_sh",
 };
 function sidebarItemKey(id: string): string {
   return ITEM_KEY_OVERRIDES[id] || String(id).replace("item-", "").replace(/-/g, "_");
@@ -457,7 +459,6 @@ export function Sidebar({ role }: SidebarProps) {
                 !String(i.id || "").toLowerCase().includes("automation") &&
                 !String(i.href || "").toLowerCase().includes("automation") &&
                 i.id !== "item-scmhub-cases" &&
-                i.id !== "item-support-sh" &&
                 i.id !== "item-import" &&
                 i.id !== "item-api-intelligence" &&
                 i.id !== "item-demo-accounts" &&
