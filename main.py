@@ -15724,7 +15724,7 @@ class CaseCreateRequest(BaseModel):
     status: str = "Open"
     priority: str = "Medium"
     category: Optional[str] = None
-    case_type: Optional[str] = "Bug"
+    case_type: Optional[str] = "Issue"
     url: Optional[str] = None
     lead_id: Optional[int] = None
     client_id: Optional[int] = None
