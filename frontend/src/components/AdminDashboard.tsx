@@ -2,7 +2,7 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import type { Variants } from "framer-motion";
-import { Users, Send, Briefcase, Target, Activity, Phone, GraduationCap, ArrowUpRight, CheckCircle2, TrendingUp, DollarSign, Timer, AlertTriangle, Sparkles, Loader2, Printer, Plus, ChevronUp, ChevronDown, Bot, X, MapPin, Zap, Mail, Globe, Trophy, Lightbulb, BarChart2, FolderKanban } from "lucide-react";
+import { Users, Send, Briefcase, Target, Activity, Phone, GraduationCap, ArrowUpRight, CheckCircle2, TrendingUp, IndianRupee, Timer, AlertTriangle, Sparkles, Loader2, Printer, Plus, ChevronUp, ChevronDown, Bot, X, MapPin, Zap, Mail, Globe, Trophy, Lightbulb, BarChart2, FolderKanban } from "lucide-react";
 import Link from "next/link";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, PieChart, Pie, Cell, RadialBarChart, RadialBar } from "recharts";
 import { cn } from "@/lib/utils";
@@ -123,17 +123,6 @@ function AgentDataViewer({ data, overview }: { data?: string | null; overview?: 
   );
 }
 
-// One card in the dashboard's projects grid (adminStats.projectsData).
-type DashboardProject = {
-  id: number;
-  name: string;
-  status: string;
-  progress: number;
-  ticket_done: number;
-  ticket_in_progress: number;
-  ticket_total: number;
-};
-
 // Data comes from adminStats from the backend
 const itemVariants: Variants = {
   hidden: { opacity: 0, y: 20 },
@@ -149,6 +138,7 @@ export function AdminDashboard({ adminStats, NAV_CARDS, language, isDemo }: any)
   const [myLeads, setMyLeads] = useState<any[]>([]);
   const [upgradeRequested, setUpgradeRequested] = useState(false);
   const [upgrading, setUpgrading] = useState(false);
+  const [mgmtStats, setMgmtStats] = useState<any>(null);
 
   const handleUpgrade = async () => {
     setUpgrading(true);
@@ -174,6 +164,12 @@ export function AdminDashboard({ adminStats, NAV_CARDS, language, isDemo }: any)
       fetch(`${API_BASE_URL}/leads`).then(r => r.json()).then(d => {
         setMyLeads(d.leads || []);
       });
+    }
+    if (role === 'Admin' || role === 'SalesManager') {
+      fetch(`${API_BASE_URL}/management/dashboard`)
+        .then(r => r.json())
+        .then(d => setMgmtStats(d))
+        .catch(() => {});
     }
   }, [role]);
 
@@ -230,9 +226,9 @@ export function AdminDashboard({ adminStats, NAV_CARDS, language, isDemo }: any)
       {/* KPI METRICS ROW */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { title: t("admin_dashboard.kpi_total_revenue"), value: adminStats?.revenue != null ? `$${adminStats.revenue.toLocaleString()}` : "$0", trend: t("admin_dashboard.kpi_trend_revenue"), icon: DollarSign, color: "text-emerald-500", bg: "bg-emerald-50 dark:bg-emerald-500/10" },
+          { title: t("admin_dashboard.kpi_total_revenue"), value: adminStats?.revenue != null ? `₹${adminStats.revenue.toLocaleString()}` : "₹0", trend: t("admin_dashboard.kpi_trend_revenue"), icon: IndianRupee, color: "text-emerald-500", bg: "bg-emerald-50 dark:bg-emerald-500/10" },
           { title: t("admin_dashboard.kpi_active_clients"), value: adminStats?.total || 0, trend: t("admin_dashboard.kpi_trend_clients"), icon: Users, color: "text-blue-500", bg: "bg-blue-50 dark:bg-blue-500/10" },
-          { title: t("admin_dashboard.kpi_pipeline_value"), value: adminStats?.pipelineValue != null ? `$${adminStats.pipelineValue.toLocaleString()}` : "$0", trend: t("admin_dashboard.kpi_trend_pipeline"), icon: Target, color: "text-indigo-500", bg: "bg-indigo-50 dark:bg-indigo-500/10" },
+          { title: t("admin_dashboard.kpi_pipeline_value"), value: adminStats?.pipelineValue != null ? `₹${adminStats.pipelineValue.toLocaleString()}` : "₹0", trend: t("admin_dashboard.kpi_trend_pipeline"), icon: Target, color: "text-indigo-500", bg: "bg-indigo-50 dark:bg-indigo-500/10" },
           { title: t("admin_dashboard.kpi_pending_tasks"), value: adminStats?.pending || 0, trend: t("admin_dashboard.kpi_trend_pending"), icon: Timer, color: "text-amber-500", bg: "bg-amber-50 dark:bg-amber-500/10" },
         ].map((kpi, idx) => (
           <motion.div key={idx} variants={itemVariants} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm flex items-center gap-4">
@@ -283,11 +279,11 @@ export function AdminDashboard({ adminStats, NAV_CARDS, language, isDemo }: any)
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                   <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} dy={10} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} tickFormatter={(val) => `$${val/1000}k`} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} tickFormatter={(val) => `₹${val/1000}k`} />
                   <Tooltip 
                     contentStyle={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', borderRadius: '8px', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 'bold' }} 
                     itemStyle={{ color: 'var(--text-primary)' }}
-                    formatter={(value: any) => [`$${value.toLocaleString()}`, '']}
+                    formatter={(value: any) => [`₹${value.toLocaleString()}`, '']}
                   />
                   <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '20px' }} />
                   <Area type="monotone" dataKey="revenue" name={t("admin_dashboard.revenue")} stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#colorRev)" />
@@ -365,8 +361,8 @@ export function AdminDashboard({ adminStats, NAV_CARDS, language, isDemo }: any)
             },
             {
               label: "Pipeline Value",
-              value: adminStats?.pipelineValue != null ? `$${adminStats.pipelineValue.toLocaleString()}` : "$0",
-              icon: DollarSign,
+              value: adminStats?.pipelineValue != null ? `₹${adminStats.pipelineValue.toLocaleString()}` : "₹0",
+              icon: IndianRupee,
               color: "text-indigo-500",
               bg: "bg-indigo-50 dark:bg-indigo-500/10",
             },
@@ -491,6 +487,114 @@ export function AdminDashboard({ adminStats, NAV_CARDS, language, isDemo }: any)
         </div>
       </motion.div>
 
+      {/* MANAGEMENT INSIGHTS ROW — Lead Source, Sentiment, Salesperson Perf */}
+      {mgmtStats && (role === 'Admin' || role === 'SalesManager') && (
+        <motion.div variants={itemVariants} className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-bold text-[var(--text-primary)] flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-amber-500" /> Management Insights
+            </h2>
+            <span className="text-xs font-semibold px-2.5 py-1 bg-amber-500/10 text-amber-600 rounded-md">Live Data</span>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Lead Source Breakdown */}
+            <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 border-b border-[var(--border)] bg-[var(--sidebar-hover)]/30">
+                <h3 className="font-bold text-[var(--text-primary)] text-sm flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-blue-500" /> Lead Sources
+                </h3>
+              </div>
+              <div className="p-4 space-y-3">
+                {(mgmtStats.lead_sources || []).length === 0 ? (
+                  <p className="text-sm text-[var(--text-secondary)] text-center py-4">No lead source data</p>
+                ) : (
+                  (mgmtStats.lead_sources as any[]).map((s: any, i: number) => {
+                    const total = (mgmtStats.lead_sources as any[]).reduce((sum: number, x: any) => sum + x.count, 0);
+                    const pct = total > 0 ? Math.round((s.count / total) * 100) : 0;
+                    const COLORS = ["#6366f1","#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#14b8a6"];
+                    return (
+                      <div key={i} className="space-y-1">
+                        <div className="flex justify-between text-xs font-semibold">
+                          <span className="text-[var(--text-primary)]">{s.source}</span>
+                          <span className="text-[var(--text-secondary)]">{s.count} ({pct}%)</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-slate-100 dark:bg-zinc-800">
+                          <div className="h-1.5 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: COLORS[i % COLORS.length] }} />
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Sentiment Breakdown */}
+            <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 border-b border-[var(--border)] bg-[var(--sidebar-hover)]/30">
+                <h3 className="font-bold text-[var(--text-primary)] text-sm flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-violet-500" /> Lead Sentiment
+                </h3>
+              </div>
+              <div className="p-4 space-y-2">
+                {(mgmtStats.sentiments || []).length === 0 ? (
+                  <p className="text-sm text-[var(--text-secondary)] text-center py-4">No sentiment data</p>
+                ) : (
+                  (mgmtStats.sentiments as any[]).map((s: any, i: number) => {
+                    const SENT_COLORS: Record<string, string> = {
+                      Positive: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+                      Negative: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+                      Neutral: "bg-slate-100 text-slate-600 dark:bg-zinc-800 dark:text-zinc-400",
+                    };
+                    return (
+                      <div key={i} className={`flex items-center justify-between rounded-xl px-3 py-2 ${SENT_COLORS[s.sentiment] || SENT_COLORS.Neutral}`}>
+                        <span className="text-xs font-bold">{s.sentiment}</span>
+                        <span className="text-xs font-black">{s.count} leads</span>
+                      </div>
+                    );
+                  })
+                )}
+
+                {/* Dropped Clients quick stat */}
+                <div className="mt-3 pt-3 border-t border-[var(--border)] flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[var(--text-secondary)]">
+                    Dropped Clients
+                  </span>
+                  <span className="text-sm font-black text-red-500">{mgmtStats.dropped_clients ?? 0}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Salesperson Performance */}
+            <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 border-b border-[var(--border)] bg-[var(--sidebar-hover)]/30">
+                <h3 className="font-bold text-[var(--text-primary)] text-sm flex items-center gap-2">
+                  <Trophy className="w-4 h-4 text-amber-500" /> Salesperson Performance
+                </h3>
+              </div>
+              <div className="divide-y divide-[var(--border)]">
+                {(mgmtStats.salesperson_performance || []).length === 0 ? (
+                  <p className="text-sm text-[var(--text-secondary)] text-center py-6">No performance data</p>
+                ) : (
+                  (mgmtStats.salesperson_performance as any[]).slice(0, 5).map((sp: any, i: number) => (
+                    <div key={i} className="flex items-center gap-3 px-4 py-3">
+                      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-[10px] font-black shrink-0">
+                        {sp.salesperson?.charAt(0) || "?"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-[var(--text-primary)] truncate">{sp.salesperson}</p>
+                        <p className="text-[10px] text-[var(--text-secondary)]">{sp.deals} deals</p>
+                      </div>
+                      <span className="text-xs font-black text-emerald-600 shrink-0">${sp.pipeline_value?.toLocaleString()}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       {/* PROJECTS PROGRESS */}
       {adminStats?.projectsData?.length > 0 && (
         <motion.div variants={itemVariants} className="bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-sm overflow-hidden">
@@ -503,7 +607,7 @@ export function AdminDashboard({ adminStats, NAV_CARDS, language, isDemo }: any)
             </Link>
           </div>
           <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {adminStats.projectsData.map((proj: DashboardProject) => {
+            {adminStats.projectsData.map((proj: { id: number; name: string; status: string; progress: number; ticket_done: number; ticket_in_progress: number; ticket_total: number }) => {
               const statusColor: Record<string, string> = {
                 Planning: "bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400",
                 "In Progress": "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400",
@@ -627,7 +731,7 @@ export function AdminDashboard({ adminStats, NAV_CARDS, language, isDemo }: any)
   );
 }
 
-function CallPitchWidget() {
+export function CallPitchWidget() {
   const { user } = useRole();
   const [pitchData, setPitchData] = useState<any>(null);
   const [loading, setLoading] = useState(true);

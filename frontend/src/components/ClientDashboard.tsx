@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import type { Variants } from "framer-motion";
 import { 
-  Users, Send, Briefcase, Target, Activity, CheckCircle2, TrendingUp, DollarSign, Timer, 
+  Users, Send, Briefcase, Target, Activity, CheckCircle2, TrendingUp, IndianRupee, Timer, 
   AlertTriangle, ArrowUpRight, FolderKanban, Shield, Lock, Eye, CheckCircle, Globe, ChevronRight, MessageCircle, Clock
 } from "lucide-react";
 import Link from "next/link";

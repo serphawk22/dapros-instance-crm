@@ -7698,6 +7698,132 @@ def _as_naive_utc(v):
     return v
 
 
+def _sales_manager_analytics(session: Session, user: User) -> dict:
+    """A salesperson's own progress: pipeline, lead funnel, 6-month trend, meetings, calls and the
+    task-sheet numbers they submitted. Everything is filtered to `user`; nothing team-wide is returned."""
+
+    def _naive(dt):
+        if dt is None:
+            return None
+        if getattr(dt, "tzinfo", None):
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+
+    now = datetime.utcnow()
+    today = now.date()
+
+    # Last six calendar months, oldest first.
+    months = []
+    yy, mm = today.year, today.month
+    for _ in range(6):
+        months.append((yy, mm))
+        mm -= 1
+        if mm == 0:
+            yy, mm = yy - 1, 12
+    months.reverse()
+    month_idx = {ym: i for i, ym in enumerate(months)}
+    monthly = [
+        {"month": datetime(y_, m_, 1).strftime("%b %Y"), "leads_added": 0, "deals_won": 0, "revenue_won": 0.0}
+        for (y_, m_) in months
+    ]
+
+    # ── Leads ────────────────────────────────────────────────────────────────
+    status_counts: Dict[str, int] = {}
+    for lead in session.exec(select(Lead).where(Lead.owner_id == user.id)).all():
+        label = lead.status or "New"
+        status_counts[label] = status_counts.get(label, 0) + 1
+        created = _naive(lead.created_at)
+        if created and (created.year, created.month) in month_idx:
+            monthly[month_idx[(created.year, created.month)]]["leads_added"] += 1
+
+    # ── Deals / pipeline ─────────────────────────────────────────────────────
+    stage_order = ["Lead", "Discovery", "Demo", "Negotiation", "Closed Won", "Closed Lost"]
+    stages: Dict[str, dict] = {s: {"stage": s, "count": 0, "value": 0.0} for s in stage_order}
+    open_deals = 0
+    open_value = 0.0
+    for deal in session.exec(select(Deal).where(Deal.assigned_to == user.id)).all():
+        stage = deal.stage or "Lead"
+        value = float(deal.value or 0)
+        row = stages.setdefault(stage, {"stage": stage, "count": 0, "value": 0.0})
+        row["count"] += 1
+        row["value"] += value
+        if stage not in ("Closed Won", "Closed Lost"):
+            open_deals += 1
+            open_value += value
+        elif stage == "Closed Won":
+            won = _naive(deal.won_at) or _naive(deal.updated_at) or _naive(deal.created_at)
+            if won and (won.year, won.month) in month_idx:
+                bucket = monthly[month_idx[(won.year, won.month)]]
+                bucket["deals_won"] += 1
+                bucket["revenue_won"] += value
+    pipeline = [{**r, "value": round(r["value"], 2)} for r in stages.values() if r["count"] or r["stage"] in stage_order[:4]]
+    for bucket in monthly:
+        bucket["revenue_won"] = round(bucket["revenue_won"], 2)
+
+    # ── Meetings (only ones this person hosts or created) ────────────────────
+    meeting_stats = {"total": 0, "upcoming": 0, "completed": 0, "cancelled": 0, "no_show": 0, "this_month": 0}
+    for mtg in session.exec(
+        select(Meeting).where(or_(Meeting.host_id == user.id, Meeting.created_by == user.id))
+    ).all():
+        meeting_stats["total"] += 1
+        sched = _naive(mtg.scheduled_at)
+        if mtg.status == "Completed":
+            meeting_stats["completed"] += 1
+        elif mtg.status == "Cancelled":
+            meeting_stats["cancelled"] += 1
+        elif mtg.status == "No-show":
+            meeting_stats["no_show"] += 1
+        elif mtg.status == "Scheduled" and sched and sched >= now:
+            meeting_stats["upcoming"] += 1
+        if sched and (sched.year, sched.month) == (today.year, today.month):
+            meeting_stats["this_month"] += 1
+
+    # ── Calls ────────────────────────────────────────────────────────────────
+    call_times = session.exec(
+        select(CallLog.createdAt).where(or_(CallLog.assigned_to == user.name, CallLog.assigned_to == str(user.id)))
+    ).all()
+    cutoff = now - timedelta(days=30)
+    calls = {
+        "total": len(call_times),
+        "last_30_days": sum(1 for t in call_times if (_naive(t) or datetime.min) >= cutoff),
+    }
+
+    # ── Task sheet (their own submissions, last 7 days) ──────────────────────
+    days = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+    daily = {d: {"date": d, "outreaches": 0, "positives": 0, "negatives": 0, "followups": 0, "meetings": 0} for d in days}
+    entries = session.exec(
+        select(TaskSheetEntry).where(TaskSheetEntry.user_id == user.id, TaskSheetEntry.work_date >= days[0])
+    ).all()
+    for e in entries:
+        d = daily.get(e.work_date)
+        if not d:
+            continue
+        d["outreaches"] += getattr(e, "outreaches_count", 0) or 0
+        d["positives"] += getattr(e, "positives_count", 0) or 0
+        d["negatives"] += getattr(e, "negatives_count", 0) or 0
+        d["followups"] += getattr(e, "followups_scheduled", 0) or 0
+        d["meetings"] += getattr(e, "meetings_scheduled", 0) or 0
+    totals = {k: sum(d[k] for d in daily.values()) for k in ("outreaches", "positives", "negatives", "followups", "meetings")}
+    task_sheet = {
+        "submitted_today": any(e.work_date == today.isoformat() for e in entries),
+        "days_submitted_7d": len({e.work_date for e in entries}),
+        "totals_7d": totals,
+        "positive_rate_7d": round(totals["positives"] / totals["outreaches"] * 100, 1) if totals["outreaches"] else 0,
+        "daily": list(daily.values()),
+    }
+
+    return {
+        "pipeline": pipeline,
+        "open_deals": open_deals,
+        "open_pipeline_value": round(open_value, 2),
+        "leads_by_status": [{"status": k, "count": v} for k, v in sorted(status_counts.items(), key=lambda kv: -kv[1])],
+        "monthly": monthly,
+        "meetings": meeting_stats,
+        "calls": calls,
+        "task_sheet": task_sheet,
+    }
+
+
 @app.get("/dashboard-stats")
 def dashboard_stats(
     role: str = Query("Client"),
@@ -7748,14 +7874,29 @@ def dashboard_stats(
             })
             
         activities.sort(key=lambda x: x["date"] or "", reverse=True)
-        
+
+        won_deals = session.exec(select(Deal).where(Deal.assigned_to == user.id, Deal.stage == "Closed Won")).all()
+        closed_deals = session.exec(select(Deal).where(Deal.assigned_to == user.id, Deal.stage.in_(["Closed Won", "Closed Lost"]))).all()
+        converted_leads = session.exec(select(Lead).where(Lead.owner_id == user.id, Lead.is_converted == True)).all()
+
+        try:
+            analytics = _sales_manager_analytics(session, user)
+        except Exception as exc:
+            print(f"Sales manager analytics failed for user {user.id}: {exc}")
+            analytics = None
+
         return {
             "isSalesManager": True,
             "metrics": {
                 "assigned_leads": assigned_leads_count,
                 "assigned_contacts": assigned_contacts_count,
-                "assigned_clients": assigned_clients_count
+                "assigned_clients": assigned_clients_count,
+                "deals_won": len(won_deals),
+                "revenue_won": round(sum(deal.value or 0 for deal in won_deals), 2),
+                "conversion_percentage": round((len(converted_leads) / assigned_leads_count) * 100, 2) if assigned_leads_count else 0,
+                "deal_win_rate": round((len(won_deals) / len(closed_deals)) * 100, 2) if closed_deals else 0,
             },
+            "analytics": analytics,
             "recent_activity": activities[:5]
         }
 
