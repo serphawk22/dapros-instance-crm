@@ -515,11 +515,17 @@ def list_inbox_messages(
 
 
 @router.get("/inbox/counts")
-def inbox_counts(only: Optional[str] = None, v: Viewer = Depends(get_viewer), session: Session = Depends(get_session)):
+def inbox_counts(only: Optional[str] = None, request: Request = None, session: Session = Depends(get_session)):
     live = InboxMessage.is_archived == False  # noqa: E712
     unread_cond = and_(live, InboxMessage.is_read == False)  # noqa: E712
     if only == "unread":  # the sidebar badge poll
+        try:
+            v = get_viewer(request, session)
+        except HTTPException:
+            return {"unread": 0}
         return {"unread": session.exec(_scope(select(func.count(InboxMessage.id)), InboxMessage, v).where(unread_cond)).one()}
+
+    v = get_viewer(request, session)
 
     # Conditional aggregates: 3 queries for every badge on the page instead of one query per badge.
     def n_in(cond):

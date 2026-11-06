@@ -20,6 +20,26 @@ from sqlalchemy.dialects.postgresql import JSONB
 import os
 from dotenv import load_dotenv
 
+# Ensure SQLModel>=0.0.34 UTCDateTime accepts naive datetimes (treating them as UTC)
+try:
+    from sqlmodel.sql.sqltypes import UTCDateTime as _SQLModelUTCDateTime
+
+    def _lenient_process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except Exception:
+                return value
+        if hasattr(value, "utcoffset") and value.utcoffset() is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc) if hasattr(value, "astimezone") else value
+
+    _SQLModelUTCDateTime.process_bind_param = _lenient_process_bind_param
+except Exception:
+    pass
+
 load_dotenv(override=True)
 
 # Database URL from environment

@@ -1,4 +1,4 @@
-const CACHE_NAME = "serphawk-crm-v3";
+const CACHE_NAME = "serphawk-crm-v4";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -25,10 +25,22 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// A very basic network-first strategy for a dynamic CRM
+// Network-first strategy ONLY for same-origin static/navigation requests (never intercept API or HMR calls)
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
-  
+  try {
+    const url = new URL(event.request.url);
+    if (
+      url.origin !== self.location.origin ||
+      url.pathname.startsWith("/api/") ||
+      url.pathname.startsWith("/_next/")
+    ) {
+      return;
+    }
+  } catch (e) {
+    return;
+  }
+
   event.respondWith(
     fetch(event.request).catch(() => {
       return caches.match(event.request).then((cachedResponse) => {

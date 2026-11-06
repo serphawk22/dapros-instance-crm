@@ -553,8 +553,12 @@ class RawCORSMiddleware:
                 return
 
             # For regular requests, wrap send to inject CORS headers
+            started = False
+
             async def send_with_cors(message):
+                nonlocal started
                 if message["type"] == "http.response.start":
+                    started = True
                     existing = list(message.get("headers", []))
                     # Strip any existing ACAO header to avoid duplicates
                     existing = [h for h in existing if h[0].lower() != b"access-control-allow-origin"]
@@ -567,7 +571,23 @@ class RawCORSMiddleware:
                     message = {**message, "headers": existing}
                 await send(message)
 
-            await self.app(scope, receive, send_with_cors)
+            try:
+                await self.app(scope, receive, send_with_cors)
+            except Exception as exc:
+                import json as _json
+                import traceback as _tb
+                _tb.print_exc()
+                if not started:
+                    body = _json.dumps({"message": "Internal Server Error", "details": str(exc)}).encode("utf-8")
+                    await send_with_cors({
+                        "type": "http.response.start",
+                        "status": 500,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode("ascii")),
+                        ],
+                    })
+                    await send_with_cors({"type": "http.response.body", "body": body})
         else:
             await self.app(scope, receive, send)
 
