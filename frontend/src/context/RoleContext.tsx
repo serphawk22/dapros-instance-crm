@@ -48,7 +48,8 @@ if (typeof window !== 'undefined' && !(window as any)._fetchPatched) {
         if (parsed.id) {
           config.headers = {
             ...config.headers,
-            'X-User-ID': String(parsed.id)
+            'X-User-ID': String(parsed.id),
+            ...(parsed.email ? { 'X-User-Email': String(parsed.email) } : {}),
           };
         }
         // Skip sending tenant ID if the user is a SuperAdmin, giving them global access

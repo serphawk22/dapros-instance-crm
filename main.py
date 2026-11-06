@@ -484,10 +484,17 @@ class APIIntelligenceMiddleware(BaseHTTPMiddleware):
                     pass
 
         tenant_header = request.headers.get("X-Tenant-ID")
+        email_header = (request.headers.get("X-User-Email") or request.query_params.get("email") or "").strip()
         
         if user_id_val and current_tenant_id.get() is None:
             with Session(engine) as session:
                 user_obj = session.get(User, user_id_val)
+                if email_header and (not user_obj or (user_obj.email or "").lower() != email_header.lower()):
+                    matched_user = session.exec(select(User).where(User.email == email_header)).first()
+                    if matched_user:
+                        user_obj = matched_user
+                        user_id_val = matched_user.id
+                        current_salesperson_id.set(matched_user.id)
                 if user_obj and user_obj.role != "SuperAdmin":
                     # Force tenant_id to be the user's actual tenant in the DB
                     current_tenant_id.set(user_obj.tenant_id or 1)
