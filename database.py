@@ -89,15 +89,13 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
             _db_host = urlparse(DATABASE_URL).hostname
             if _db_host and not _db_host.replace(".", "").isdigit() and _db_host != "localhost":
                 _resolved_ip = None
-                if "neon.tech" in _db_host:
+                try:
+                    import socket
+                    _resolved_ip = socket.gethostbyname(_db_host)
+                except Exception:
+                    pass
+                if not _resolved_ip and "c-7.us-east-2.aws.neon.tech" in _db_host:
                     _resolved_ip = "3.141.122.14"
-                    connect_args["hostaddr"] = _resolved_ip
-                else:
-                    try:
-                        import socket
-                        _resolved_ip = socket.gethostbyname(_db_host)
-                    except Exception:
-                        pass
                 if not _resolved_ip:
                     try:
                         import urllib.request, json
